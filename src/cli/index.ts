@@ -1,6 +1,7 @@
 import { userInfo } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   DEFAULT_LEASE_MS,
@@ -526,11 +527,37 @@ function cmdFeed(db: Db, p: Parsed): void {
 }
 
 async function cmdUi(db: Db, p: Parsed): Promise<void> {
+  await ensureUiBuilt();
   const { startServer } = await import('../server/index.ts');
   await startServer(db, {
     port: num(p, 'port') ?? 4477,
     open: !bool(p, 'no-open'),
   });
+}
+
+/**
+ * Build the UI on first run rather than serving a page that explains how to
+ * build it. "It told me to run a command" is a worse first experience than
+ * waiting two seconds, and forgetting the build step otherwise produces a
+ * screen that looks broken.
+ */
+async function ensureUiBuilt(): Promise<void> {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  if (existsSync(join(root, 'dist', 'index.html'))) return;
+
+  console.log('Building the board (first run only)…');
+  try {
+    const { build } = await import('vite');
+    // Pass configFile, not root. Given a bare `root`, Vite ignores
+    // vite.config.ts and writes to <root>/dist, which is not where the server
+    // looks.
+    await build({ configFile: join(root, 'vite.config.ts'), logLevel: 'warn' });
+  } catch (err) {
+    throw new CliError(
+      `Could not build the web UI automatically: ${(err as Error).message}\n` +
+        `Run "npm install && npm run build" in ${root}, then try again.`,
+    );
+  }
 }
 
 function requirePositional(p: Parsed, index: number, usage: string): string {

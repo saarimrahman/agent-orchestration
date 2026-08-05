@@ -1,0 +1,61 @@
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+
+/**
+ * Guards against the ways this project can be broken from the outside rather
+ * than in the code: a documented command that does not exist, or a build that
+ * writes somewhere the server does not read from. Both produce a blank page
+ * with no error, which is the worst kind of failure to debug.
+ */
+
+const ROOT = join(import.meta.dirname, '..');
+const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+
+describe('packaging', () => {
+  test('every npm script the README tells you to run exists', () => {
+    const mentioned = [...readme.matchAll(/npm run ([a-z:]+)/g)].map((m) => m[1]);
+    assert.ok(mentioned.length > 0, 'the README should document some scripts');
+
+    const missing = [...new Set(mentioned)].filter((name) => !(name in pkg.scripts));
+    assert.deepEqual(missing, [], `README references scripts that do not exist: ${missing}`);
+  });
+
+  test('the dev entrypoint is called `dev`', () => {
+    // `npm run dev` is what everyone types. If the script is named anything
+    // else, the command fails silently and the dev server never starts.
+    assert.ok(pkg.scripts.dev, 'there must be a plain `dev` script');
+  });
+
+  test('the build writes where the server looks for it', () => {
+    const config = readFileSync(join(ROOT, 'vite.config.ts'), 'utf8');
+    const root = /root:\s*'([^']+)'/.exec(config)?.[1];
+    const outDir = /outDir:\s*'([^']+)'/.exec(config)?.[1];
+    assert.ok(root && outDir, 'vite config should declare root and outDir');
+
+    // src/server/index.ts serves <repo>/dist
+    const served = resolve(ROOT, 'dist');
+    const built = resolve(ROOT, root, outDir);
+    assert.equal(built, served, 'vite outDir must match the directory the server serves');
+  });
+
+  test('the server and the dev proxy agree on the API port', () => {
+    const config = readFileSync(join(ROOT, 'vite.config.ts'), 'utf8');
+    const proxyPort = /ORCH_API_PORT \?\? (\d+)/.exec(config)?.[1];
+    const serverDefault = /num\(p, 'port'\) \?\? (\d+)/.exec(
+      readFileSync(join(ROOT, 'src', 'cli', 'index.ts'), 'utf8'),
+    )?.[1];
+
+    assert.ok(proxyPort && serverDefault, 'both ports should be discoverable');
+    assert.equal(proxyPort, serverDefault, 'the dev proxy must point at the API default port');
+  });
+
+  test('the dev server binds IPv4 so 127.0.0.1 resolves', () => {
+    const config = readFileSync(join(ROOT, 'vite.config.ts'), 'utf8');
+    // Vite's default binds ::1 only, which makes http://127.0.0.1 refuse
+    // connections and look exactly like a broken app.
+    assert.match(config, /host:\s*'127\.0\.0\.1'/);
+  });
+});

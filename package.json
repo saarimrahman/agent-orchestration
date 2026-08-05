@@ -17,11 +17,12 @@
   ],
   "scripts": {
     "orch": "node ./bin/orch",
+    "dev": "node ./scripts/dev.mjs",
     "dev:web": "vite",
     "build": "vite build",
+    "start": "node ./bin/orch ui",
     "test": "node --disable-warning=ExperimentalWarning --test",
-    "typecheck": "tsc --noEmit",
-    "start": "node ./bin/orch ui"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.0",

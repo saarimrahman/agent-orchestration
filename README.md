@@ -35,11 +35,13 @@ directly — no build step for the CLI, no native modules to compile).
 
 ```bash
 npm install
-npm run build          # builds the web UI once
 npm link               # optional: puts `orch` on your PATH
 ```
 
 Without `npm link`, use `node bin/orch …` or `npm run orch -- …`.
+
+There is no separate build step — `orch ui` builds the board itself the first
+time it runs.
 
 ## Quick start
 
@@ -191,7 +193,21 @@ It updates live from writes made by *any* process, so a CLI command in another
 terminal moves the board within a second — the server watches the append-only
 event log rather than its own in-process state.
 
-For UI work: `orch ui --no-open` in one terminal, `npm run dev:web` in another.
+### Working on the UI
+
+```bash
+npm run dev
+```
+
+That starts the API server and the Vite dev server together and prints both
+URLs — open the first one (`http://127.0.0.1:4478`) for hot reload. Ctrl-C stops
+both. Override ports with `ORCH_PORT` and `ORCH_WEB_PORT`.
+
+**If the board looks blank**, you are almost certainly pointed at a port with
+nothing on it. `orch ui` serves on **4477**; `npm run dev` serves the hot-reload
+board on **4478** and only that one has Vite behind it. Check the terminal for
+`Port … already in use` — a stale server from an earlier run will take the port
+and make the new one exit.
 
 ## Where the data lives
 
