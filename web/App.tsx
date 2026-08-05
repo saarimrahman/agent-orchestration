@@ -247,6 +247,25 @@ export function App() {
           </button>
         )}
 
+        {state.tasks.length === 0 && state.recently_closed.length === 0 && (
+          <div className="mx-4 mb-3 flex items-center gap-4 rounded-xl border border-accent/25
+                          bg-accent/8 px-4 py-3">
+            <div>
+              <p className="text-[13px] font-medium text-ink-50">Your board is ready</p>
+              <p className="mt-0.5 text-[12px] text-ink-400">
+                Create the first task here. Agent and CLI updates will appear live on this board.
+              </p>
+            </div>
+            <button
+              onClick={() => setComposing(true)}
+              className="ml-auto shrink-0 rounded-md bg-accent px-3 py-1.5 text-[12px]
+                         font-medium text-ink-950 transition-opacity hover:opacity-90"
+            >
+              + Create first task
+            </button>
+          </div>
+        )}
+
         <div className="min-h-0 flex-1">
           <Board tasks={tasks} onOpen={setSelected} onMove={move} />
         </div>

@@ -30,6 +30,7 @@ const BOOLEAN_FLAGS = new Set([
   'force',
   'quiet',
   'version',
+  'no-auth',
 ]);
 
 function expand(name: string): string {

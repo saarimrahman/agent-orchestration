@@ -151,6 +151,103 @@ describe('api', () => {
   });
 });
 
+describe('live update stream', () => {
+  test('the poll loop stops when the client goes away', async () => {
+    const db = seed();
+
+    // Count queries rather than inspecting timers: if the loop is still alive
+    // it keeps hitting SQLite every 750ms, and that is directly observable.
+    let queries = 0;
+    const realPrepare = db.prepare.bind(db);
+    (db as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+      queries += 1;
+      return realPrepare(sql);
+    };
+
+    const res = await createApp(db).request('http://x/api/stream');
+    assert.equal(res.status, 200);
+
+    await new Promise((r) => setTimeout(r, 1_600));
+    assert.ok(queries > 0, 'the stream should be polling while a client is attached');
+
+    await res.body?.cancel();
+    await new Promise((r) => setTimeout(r, 400));
+
+    const afterCancel = queries;
+    await new Promise((r) => setTimeout(r, 2_000));
+    assert.equal(
+      queries,
+      afterCancel,
+      'polling must stop once the client disconnects, or every closed tab leaks a timer',
+    );
+  });
+});
+
+describe('access token', () => {
+  // Exercised against a second app instance so the main suite stays ungated.
+  const gated = createApp(seed(), { token: 'sekret' });
+  const hit = (path: string, init?: RequestInit) =>
+    gated.request(`http://board.local${path}`, init);
+
+  test('blocks everything without the token', async () => {
+    for (const path of ['/', '/api/state', '/api/stream', '/api/tasks/demo-1']) {
+      assert.equal((await hit(path)).status, 401, `${path} should be gated`);
+    }
+  });
+
+  test('blocks writes too, not just reads', async () => {
+    const res = await hit('/api/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ title: 'sneaky', project: 'demo' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    assert.equal(res.status, 401);
+  });
+
+  test('a wrong token is rejected', async () => {
+    assert.equal((await hit('/api/state?t=guess')).status, 401);
+    assert.equal(
+      (await hit('/api/state', { headers: { 'x-orch-token': 'guess' } })).status,
+      401,
+    );
+  });
+
+  test('?t= exchanges for a cookie and drops the token from the URL', async () => {
+    const res = await hit('/?t=sekret');
+    assert.equal(res.status, 302);
+
+    const location = res.headers.get('location') ?? '';
+    assert.ok(!location.includes('sekret'), 'the token must not survive in the redirect target');
+
+    const cookie = res.headers.get('set-cookie') ?? '';
+    assert.match(cookie, /orch_token=sekret/);
+    assert.match(cookie, /HttpOnly/, 'the cookie should not be readable from JavaScript');
+  });
+
+  test('the cookie carries subsequent requests, including the SSE stream', async () => {
+    const headers = { cookie: 'orch_token=sekret' };
+    assert.equal((await hit('/api/state', { headers })).status, 200);
+
+    // EventSource cannot set headers, so cookie auth is what makes live
+    // updates work behind the gate. The stream loops until the client goes
+    // away, so cancel the body or it keeps the event loop alive forever.
+    const stream = await hit('/api/stream', { headers });
+    assert.equal(stream.status, 200);
+    await stream.body?.cancel();
+  });
+
+  test('a header works for curl and scripts', async () => {
+    const res = await hit('/api/state', { headers: { 'x-orch-token': 'sekret' } });
+    assert.equal(res.status, 200);
+  });
+
+  test('other query parameters survive the redirect', async () => {
+    const res = await hit('/api/state?t=sekret&closed=1');
+    assert.match(res.headers.get('location') ?? '', /closed=1/);
+    assert.ok(!(res.headers.get('location') ?? '').includes('sekret'));
+  });
+});
+
 describe('web bundle', () => {
   test('renders the board without throwing', async () => {
     const bundled = await build({
@@ -207,6 +304,52 @@ describe('web bundle', () => {
       'the question should be readable on the board without opening the task',
     );
     assert.match(text, /waiting on your answer/, 'the banner should call out pending questions');
+
+    dom.window.close();
+  });
+
+  test('an empty queue presents a clear first-task action', async () => {
+    const bundled = await build({
+      entryPoints: [join(ROOT, 'web', 'main.tsx')],
+      bundle: true,
+      write: false,
+      format: 'iife',
+      platform: 'browser',
+      jsx: 'automatic',
+      loader: { '.css': 'empty' },
+      define: { 'process.env.NODE_ENV': '"production"' },
+    });
+
+    const base = `http://127.0.0.1:${server!.port}`;
+    const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+      url: base,
+      runScripts: 'dangerously',
+      pretendToBeVisual: true,
+    });
+
+    const globals = dom.window as unknown as Record<string, unknown>;
+    globals.EventSource = class {
+      addEventListener() {}
+      close() {}
+      onerror = null;
+    };
+    globals.fetch = async (input: string, init?: RequestInit) => {
+      const response = await fetch(new URL(String(input), base), init);
+      if (new URL(String(input), base).pathname !== '/api/state') return response;
+
+      const state = await response.json();
+      return Response.json({ ...state, tasks: [], recently_closed: [] });
+    };
+
+    const script = dom.window.document.createElement('script');
+    script.textContent = bundled.outputFiles[0].text;
+    dom.window.document.body.appendChild(script);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+
+    const text = dom.window.document.getElementById('root')?.textContent ?? '';
+    assert.match(text, /Your board is ready/);
+    assert.match(text, /Create first task/);
+    assert.match(text, /Backlog/, 'the Kanban columns should remain visible when empty');
 
     dom.window.close();
   });

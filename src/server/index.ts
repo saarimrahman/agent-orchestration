@@ -1,8 +1,11 @@
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
+import type { Context, Next } from 'hono';
+import { getCookie, setCookie } from 'hono/cookie';
 import { streamSSE } from 'hono/streaming';
 import { exec } from 'node:child_process';
+import { hostname } from 'node:os';
 import { existsSync } from 'node:fs';
 import { dirname, join, relative as relPath } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,7 +57,44 @@ function optionalDate(body: Body, key: string): Date | null | undefined {
   return parseWhenOrThrow(String(raw));
 }
 
-export function createApp(db: Db) {
+const COOKIE = 'orch_token';
+
+/**
+ * Shared-secret gate, used only when the server is reachable off-loopback.
+ *
+ * The token arrives once as `?t=…`, is exchanged for a cookie, and is stripped
+ * from the URL so it does not linger in history or get pasted into a chat. A
+ * header works too, for curl and scripts. EventSource cannot set headers, but
+ * it does send cookies, so the SSE stream is covered by the same check.
+ */
+function tokenGate(token: string) {
+  return async (ctx: Context, next: Next) => {
+    const url = new URL(ctx.req.url);
+
+    if (url.searchParams.get('t') === token) {
+      setCookie(ctx, COOKIE, token, {
+        path: '/',
+        httpOnly: true,
+        sameSite: 'Lax',
+        maxAge: 60 * 60 * 24 * 30,
+      });
+      url.searchParams.delete('t');
+      return ctx.redirect(url.pathname + (url.searchParams.size ? `?${url.searchParams}` : ''));
+    }
+
+    if (getCookie(ctx, COOKIE) === token || ctx.req.header('x-orch-token') === token) {
+      return next();
+    }
+
+    return ctx.text(
+      'This board needs the access token.\n\n' +
+        'Open the full URL printed by `orch ui`, the one ending in ?t=…\n',
+      401,
+    );
+  };
+}
+
+export function createApp(db: Db, options: { token?: string } = {}) {
   const app = new Hono();
 
   // Core throws plain Errors carrying guidance meant for the caller, so pass the
@@ -63,6 +103,8 @@ export function createApp(db: Db) {
     console.warn(`${ctx.req.method} ${ctx.req.path} — ${err.message}`);
     return ctx.json({ error: err.message }, 400);
   });
+
+  if (options.token) app.use('*', tokenGate(options.token));
 
   /** Everything the board needs for a first paint, in one round trip. */
   app.get('/api/state', (ctx) => {
@@ -219,8 +261,19 @@ export function createApp(db: Db) {
    */
   app.get('/api/stream', (ctx) =>
     streamSSE(ctx, async (stream) => {
+      // `closed` alone is not enough to end the loop: a client that goes away
+      // without a clean close leaves it polling SQLite forever, so every shut
+      // browser tab would leak a timer for the life of the process. Watch the
+      // abort paths too.
+      let done = false;
+      const stop = () => {
+        done = true;
+      };
+      stream.onAbort(stop);
+      ctx.req.raw.signal?.addEventListener('abort', stop, { once: true });
+
       let last = -1;
-      while (!stream.closed) {
+      while (!done && !stream.closed && !stream.aborted) {
         const marker = changeMarker(db);
         if (marker !== last) {
           last = marker;
@@ -257,19 +310,50 @@ function openBrowser(url: string): void {
   });
 }
 
-export function startServer(
-  db: Db,
-  opts: { port?: number; open?: boolean } = {},
-): Promise<void> {
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
+
+export function isLoopback(host: string): boolean {
+  return LOOPBACK.has(host);
+}
+
+export type ServeOptions = {
+  port?: number;
+  open?: boolean;
+  /** Interface to bind. Anything other than loopback exposes the board. */
+  host?: string;
+  /** Shared secret. Required automatically when host is not loopback. */
+  token?: string;
+};
+
+export function startServer(db: Db, opts: ServeOptions = {}): Promise<void> {
   const port = opts.port ?? 4477;
-  const app = createApp(db);
+  const host = opts.host ?? '127.0.0.1';
+  const exposed = !isLoopback(host);
+  const app = createApp(db, { token: opts.token });
 
   return new Promise(() => {
-    serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, (info) => {
-      const url = `http://127.0.0.1:${info.port}`;
-      console.log(`orch board  ${url}`);
-      console.log(`press ctrl-c to stop`);
-      if (opts.open !== false) openBrowser(url);
+    serve({ fetch: app.fetch, port, hostname: host }, (info) => {
+      const shown = exposed ? (hostname() ?? host) : '127.0.0.1';
+      const suffix = opts.token ? `/?t=${opts.token}` : '';
+      const url = `http://${shown}:${info.port}${suffix}`;
+
+      if (exposed) {
+        console.log('');
+        console.log(`  Board   ${url}`);
+        console.log('');
+        console.log(`  Reachable from the network on port ${info.port}.`);
+        console.log(
+          opts.token
+            ? '  The token in that URL is required. Open the whole link.'
+            : '  No token: anyone who can reach this host can read and change your tasks.',
+        );
+        console.log('');
+      } else {
+        console.log(`orch board  ${url}`);
+        console.log('press ctrl-c to stop');
+      }
+
+      if (opts.open !== false && !exposed) openBrowser(url);
     });
   });
 }

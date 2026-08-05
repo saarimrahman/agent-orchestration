@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { userInfo } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -85,6 +86,7 @@ Other
   init [--project <key>]    Create the database and write agent instructions
   instructions              Print the agent workflow
   ui [--port 4477]          Open the board in a browser
+  ui --host                 Also serve on the network (prints an access token)
   where                     Print the database path
 
 Common options
@@ -528,10 +530,26 @@ function cmdFeed(db: Db, p: Parsed): void {
 
 async function cmdUi(db: Db, p: Parsed): Promise<void> {
   await ensureUiBuilt();
-  const { startServer } = await import('../server/index.ts');
+  const { startServer, isLoopback } = await import('../server/index.ts');
+
+  // `--host` with no value means "all interfaces", which is what people expect
+  // from every other dev server.
+  const host = present(p, 'host')
+    ? (str(p, 'host') ?? '0.0.0.0')
+    : (process.env.ORCH_HOST ?? '127.0.0.1');
+
+  let token: string | undefined;
+  if (!isLoopback(host) && !bool(p, 'no-auth')) {
+    // Off-loopback the board is readable and writable by anyone who can reach
+    // the port, so it gets a shared secret unless you explicitly opt out.
+    token = str(p, 'token') ?? process.env.ORCH_TOKEN ?? randomBytes(16).toString('base64url');
+  }
+
   await startServer(db, {
     port: num(p, 'port') ?? 4477,
     open: !bool(p, 'no-open'),
+    host,
+    token,
   });
 }
 

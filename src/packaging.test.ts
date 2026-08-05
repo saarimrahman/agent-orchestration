@@ -52,10 +52,18 @@ describe('packaging', () => {
     assert.equal(proxyPort, serverDefault, 'the dev proxy must point at the API default port');
   });
 
-  test('the dev server binds IPv4 so 127.0.0.1 resolves', () => {
+  test('the dev server defaults to IPv4 loopback so 127.0.0.1 resolves', () => {
     const config = readFileSync(join(ROOT, 'vite.config.ts'), 'utf8');
-    // Vite's default binds ::1 only, which makes http://127.0.0.1 refuse
+    // Vite's own default binds ::1 only, which makes http://127.0.0.1 refuse
     // connections and look exactly like a broken app.
-    assert.match(config, /host:\s*'127\.0\.0\.1'/);
+    assert.match(config, /ORCH_HOST \?\? '127\.0\.0\.1'/);
+    assert.match(config, /host,/, 'the resolved host must be passed to the server');
+  });
+
+  test('exposing the dev server relaxes the Host header check', () => {
+    const config = readFileSync(join(ROOT, 'vite.config.ts'), 'utf8');
+    // Otherwise reaching a dev box by its own hostname returns Vite's
+    // "Blocked request" page, which reads as a broken app.
+    assert.match(config, /allowedHosts: exposed \? true : undefined/);
   });
 });

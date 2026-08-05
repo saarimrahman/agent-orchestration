@@ -151,7 +151,7 @@ leases in one payload — sized to drop straight into a prompt.
 | `orch tag add\|rm <ref> <tag>` / `orch tags` | Tags |
 | `orch project add\|ls\|archive <key>` | Projects |
 | `orch feed` | Recent activity across all tasks |
-| `orch ui [--port 4477]` | Open the board |
+| `orch ui [--port 4477] [--host]` | Open the board locally or on the network |
 | `orch instructions` | Print the agent workflow |
 | `orch where` | Print the database path |
 
@@ -193,10 +193,34 @@ It updates live from writes made by *any* process, so a CLI command in another
 terminal moves the board within a second — the server watches the append-only
 event log rather than its own in-process state.
 
+### Open the board from your laptop
+
+An SSH tunnel is the recommended route: the board stays on the devvm's loopback
+interface, nothing is exposed to the network, and no orch configuration changes.
+Start the board on the devvm as usual:
+
+```bash
+orch ui
+```
+
+Then run this on your laptop and open `http://127.0.0.1:4477` there:
+
+```bash
+ssh -N -L 4477:127.0.0.1:4477 devvm61439.cco0
+```
+
+If tunnelling is not available, `orch ui --host` binds to all interfaces. Orch
+prints a URL containing a freshly generated access token; open the complete
+URL. The token is exchanged for an HTTP-only cookie and removed from the
+address bar. Use `--host <address>` to bind one interface, or `--no-auth` only
+when everyone who can reach the port is allowed to read and change every task.
+
 ### Working on the UI
 
 ```bash
 npm run dev
+# expose hot reload when a tunnel is not practical (no access token)
+npm run dev -- --host
 ```
 
 That starts the API server and the Vite dev server together and prints both
@@ -235,4 +259,4 @@ catches render crashes without needing a browser.
 
 No agent spawning, worktrees, or log capture. No MCP server — the CLI covers the
 same ground at zero context cost, and the core layer is a thin wrapper away if
-that changes. No auth, no multi-user, no sync.
+that changes. No accounts, multi-user permissions, or sync.
