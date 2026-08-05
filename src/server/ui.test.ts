@@ -450,8 +450,15 @@ describe('web bundle', () => {
     const rows = () => [...dom.window.document.querySelectorAll('button[aria-label^="View memory:"]')];
     let memoryRow = dom.window.document.querySelector('button[aria-label="View memory: Browser memory"]');
     assert.ok(memoryRow, 'each compact memory title should open its detail');
+    assert.match(memoryRow.textContent ?? '', /note/);
+    assert.match(memoryRow.textContent ?? '', /global/);
+    assert.match(memoryRow.textContent ?? '', /active/);
     assert.match(memoryRow.textContent ?? '', /#browser/);
     assert.match(memoryRow.textContent ?? '', /#ui/);
+    assert.match(memoryRow.querySelector('[data-memory-meta="kind"]')?.className ?? '', /text-accent-soft/);
+    assert.match(memoryRow.querySelector('[data-memory-meta="status"]')?.className ?? '', /text-status-done/);
+    assert.match(memoryRow.querySelector('[data-memory-tag="browser"]')?.getAttribute('style') ?? '', /color:/);
+    assert.match(memoryRow.querySelector('[data-memory-tag="ui"]')?.getAttribute('style') ?? '', /color:/);
 
     const sortSelect = dom.window.document.querySelector('select[aria-label="Sort memories"]') as HTMLSelectElement;
     sortSelect.value = 'title-asc';

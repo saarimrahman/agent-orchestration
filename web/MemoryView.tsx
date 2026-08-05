@@ -45,6 +45,37 @@ function displayLabel(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1).replaceAll('-', ' ');
 }
 
+const TAG_COLORS = ['#7c8cff', '#2dd4bf', '#f59e0b', '#fb7185', '#a78bfa', '#38bdf8', '#4ade80'];
+
+function tagColor(tag: string): string {
+  let hash = 0;
+  for (const character of tag) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
+  return TAG_COLORS[Math.abs(hash) % TAG_COLORS.length];
+}
+
+function MemoryMetadata({ memory, className }: { memory: MemoryDocument; className?: string }) {
+  return (
+    <span className={cn('flex flex-wrap items-center gap-1', className)}>
+      <Badge data-memory-meta="kind">{memory.kind}</Badge>
+      <Badge data-memory-meta="scope" variant="secondary">{memory.project_key ?? 'global'}</Badge>
+      <Badge data-memory-meta="status" variant={memory.status === 'active' ? 'success' : 'outline'}>{memory.status}</Badge>
+      {memory.tags.map((tag) => {
+        const color = tagColor(tag);
+        return (
+          <Badge
+            key={tag}
+            data-memory-tag={tag}
+            variant="outline"
+            style={{ color, borderColor: `${color}33`, backgroundColor: `${color}14` }}
+          >
+            #{tag}
+          </Badge>
+        );
+      })}
+    </span>
+  );
+}
+
 export function MemoryView({ query, project }: { query: string; project: string | null }) {
   const [memories, setMemories] = useState<MemoryDocument[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -257,13 +288,7 @@ export function MemoryView({ query, project }: { query: string; project: string 
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[12.5px] font-semibold tracking-[-0.005em] text-ink-50">{memory.title}</span>
-                  {memory.tags.length > 0 && (
-                    <span className="mt-1.5 flex flex-wrap gap-1">
-                      {memory.tags.map((tag) => (
-                        <span key={tag} className="rounded-md border border-white/[.055] bg-white/[.04] px-1.5 py-0.5 text-[9.5px] leading-none text-ink-500">#{tag}</span>
-                      ))}
-                    </span>
-                  )}
+                  <MemoryMetadata memory={memory} className="mt-1.5" />
                 </span>
                 <ChevronRight className="mt-2 size-4 shrink-0 text-ink-700 transition-transform group-hover:translate-x-0.5 group-hover:text-ink-400" />
               </button>
@@ -348,19 +373,16 @@ function MemoryDetail({
         </header>
 
         <div className="p-5">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Badge>{memory.kind}</Badge>
-            <Badge variant="secondary">{memory.project_key ?? 'global'}</Badge>
-            <Badge variant={memory.status === 'active' ? 'success' : 'outline'}>{memory.status}</Badge>
-            <span className="ml-auto text-[9.5px] text-ink-650">Updated {new Date(memory.updated_at).toLocaleString()}</span>
+          <div className="flex flex-wrap items-start gap-2">
+            <MemoryMetadata memory={memory} className="flex-1" />
+            <span className="ml-auto shrink-0 text-[9.5px] text-ink-650">Updated {new Date(memory.updated_at).toLocaleString()}</span>
           </div>
           <div
             className="prose-orchestration mt-5 text-[12px] text-ink-300"
             dangerouslySetInnerHTML={{ __html: renderMarkdown(memory.body) }}
           />
-          {(memory.tags.length > 0 || memory.sources.length > 0) && (
+          {memory.sources.length > 0 && (
             <div className="mt-5 flex flex-wrap gap-x-2 gap-y-1 border-t border-white/[.055] pt-4 text-[10px] text-ink-600">
-              {memory.tags.map((tag) => <span key={tag}>#{tag}</span>)}
               {memory.sources.map((source) => <span key={source}>source:{source}</span>)}
             </div>
           )}
