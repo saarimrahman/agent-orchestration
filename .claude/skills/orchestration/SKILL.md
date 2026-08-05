@@ -67,14 +67,33 @@ orchestration remember "UI tests need a production build first" -p demo \
 
 Use `orchestration memory search "<query>" --json` for explicit recall. Use
 `--candidate` for an unverified learning; candidates stay out of automatic
-task context until `orchestration memory promote <id>`. Memory is local Markdown under
-`~/.orchestration/memory` by default, not the source repository. Do not store secrets.
+task context until `orchestration memory promote <id>`.
+
+Memories are meant to be revised, not just appended to. When one turns out to be
+wrong, incomplete, or superseded, correct it in place rather than writing a
+second memory that contradicts the first:
+
+```
+orchestration memory edit <id> --body "<corrected text>" --verified
+orchestration memory edit <id> --title "..." --kind pitfall --tag ui
+orchestration memory archive <id>          # wrong or no longer true
+orchestration remember "..." --supersedes <id>
+```
+
+`orchestration memory edit <id>` with no flags prints the Markdown path so you
+can edit the file directly; follow that with `orchestration memory commit`.
+
+Memory is local Markdown under `~/.orchestration/memory` by default, not the
+source repository. Do not store secrets.
 
 ### Reading the board
 
 - `orchestration ready --json` — what is claimable right now
 - `orchestration ls --json` — everything open, with filters (`--status`, `--tag`,
   `--project`, `--assignee`, `--due today`)
+- `orchestration ls "<text>" --json` — full-text over title and body. Add
+  `--all` to include closed tasks. Search before you add: the queue often
+  already has the thing you are about to file.
 - `orchestration inbox --json` — everything waiting on a human, with the question
 - `orchestration digest --json` — waiting-on-human, overdue, due today, ready, in
   progress, and abandoned leases in one payload. Use this when you are triaging

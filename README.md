@@ -177,6 +177,7 @@ secrets in them.
 | `orchestration inbox` | Everything waiting on you |
 | `orchestration add "<title>"` | Create — `-p` project, `-P` priority, `--due`, `--tag`, `--dep`, `--recur` |
 | `orchestration ls` | List — `--status`, `--tag`, `--project`, `--assignee`, `--due today`, `--all` |
+| `orchestration ls "<text>"` | Full-text over title and body; combine with any filter or `--all` |
 | `orchestration show <ref>` | Detail, comments, history, and relevant durable memory |
 | `orchestration edit <ref>` | Change any field |
 | `orchestration comment <ref> "<text>"` | Note, or `--progress` for an agent update |
@@ -187,7 +188,8 @@ secrets in them.
 | `orchestration project add\|ls\|archive <key>` | Projects |
 | `orchestration remember "<learning>"` | Save a project memory; `--global` saves a global one |
 | `orchestration memory ls\|search\|show` | Browse the local Markdown memory store |
-| `orchestration memory edit\|promote\|archive <id>` | Maintain a memory's content and lifecycle |
+| `orchestration memory edit <id>` | Revise in place — `--title`, `--body`, `--kind`, `--status`, `--tag`, `--verified`; no flags prints the Markdown path |
+| `orchestration memory promote\|archive <id>` | Promote a candidate, or retire one that is no longer true |
 | `orchestration memory diff\|history\|status\|commit` | Inspect or save private memory history |
 | `orchestration memory reindex` | Rebuild full-text search from Markdown |
 | `orchestration context <ref>` | Relevant memory for one task, with a bounded result count |

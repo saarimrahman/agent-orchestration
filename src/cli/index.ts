@@ -98,7 +98,7 @@ Waiting on a human
 
 Tasks
   add "<title>"             Create a task
-  ls                        List open tasks
+  ls [text]                 List open tasks; a text argument searches title and body
   show <ref>                Full detail, comments, and history
   edit <ref>                Change title, body, priority, due date, project…
   comment <ref> "<text>"    Leave a note (--progress marks it an agent update)
@@ -115,7 +115,8 @@ Structure
 Memory (stored outside the repo in ~/.orchestration/memory)
   remember "<learning>"     Save a durable project memory
   memory ls|search|show     Find and inspect memories
-  memory edit|promote|archive <id>
+  memory edit <id> [--title|--body|--kind|--status|--tag|--verified]
+  memory promote|archive <id>
   memory diff|history|status|commit
   memory reindex            Rebuild the SQLite index from Markdown
   context <task-ref>        Show bounded memory relevant to a task
@@ -368,7 +369,7 @@ function cmdStatus(db: Db, p: Parsed, status: Status): void {
 
   const { task: updated, recurrence } = setStatus(db, task.id, status, who);
   out(p, { task: updated, recurrence }, () => {
-    const lines = [`${c.bold(updated.ref)} → ${status}`];
+    const lines = [`${c.bold(updated.ref)} → ${updated.status}`];
     if (recurrence) {
       lines.push(
         c.dim(`next occurrence ${recurrence.ref} due ${recurrence.due_at?.slice(0, 10)}`),
@@ -394,8 +395,12 @@ function cmdAsk(db: Db, p: Parsed): void {
   const { task: updated } = askForInput(db, task.id, actorFor(p, task), question);
   out(p, updated, () =>
     [
-      `${c.bold(updated.ref)} → ${c.magenta('needs_input')}`,
-      c.dim('Waiting on a human. It has left the queue and the lease is released.'),
+      `${c.bold(updated.ref)} → ${c.magenta(updated.status)}`,
+      // Both lines describe the row as it was read back after the write, so a
+      // write that did not land cannot print a success message anyway.
+      updated.status === 'needs_input'
+        ? c.dim('Waiting on a human. It has left the queue and the lease is released.')
+        : c.dim('The question was recorded, but the task did not move to needs_input.'),
     ].join('\n'),
   );
 }
@@ -659,12 +664,12 @@ function cmdMemory(db: Db, p: Parsed): void {
   }
   if (action === 'promote') {
     const updated = updateMemory(db, root, project, memory.id, { status: 'active' });
-    out(p, updated, () => `${c.bold(updated.id.slice(0, 12))} → active`);
+    out(p, updated, () => `${c.bold(updated.id.slice(0, 12))} → ${updated.status}`);
     return;
   }
   if (action === 'archive' || action === 'forget') {
     const updated = archiveMemory(db, root, project, memory.id);
-    out(p, updated, () => `${c.bold(updated.id.slice(0, 12))} → archived`);
+    out(p, updated, () => `${c.bold(updated.id.slice(0, 12))} → ${updated.status}`);
     return;
   }
   if (action === 'edit') {

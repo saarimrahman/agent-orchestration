@@ -430,3 +430,40 @@ describe('AGENTS.md merge', () => {
     assert.ok(twice.startsWith('# Project\n\nSome notes.\n'));
   });
 });
+
+describe('writes report what actually landed', () => {
+  // An agent that trusts a confirmation it cannot verify is worse than one that
+  // gets an error: it reports success and moves on. Every write returns the row
+  // as re-read after the transaction, so a caller can print that rather than a
+  // hardcoded literal describing what was merely intended.
+  test('ask returns the re-read row, and long or awkward text survives it', () => {
+    const db = fresh();
+
+    const cases: [string, string][] = [
+      ['short', 'Cookies or JWT?'],
+      ['long', 'Should we use session cookies or JWT? '.repeat(3000)],
+      ['newlines', 'line one\nline two\n\nline four?'],
+      ['non-ascii', 'Use JWT — not cookies… ≥2 refresh tokens'],
+    ];
+
+    for (const [label, question] of cases) {
+      const task = createTask(db, { title: `ask-${label}`, project: 'demo', actor: 'test' });
+      const { task: updated, comment } = askForInput(db, task.id, 'agent', question);
+
+      assert.equal(updated.status, 'needs_input', `${label}: status must be re-read as parked`);
+      assert.equal(updated.assignee, null, `${label}: the lease must be released`);
+      // `.trim()` is the only transformation a question is subject to; nothing
+      // is truncated, including six-figure character counts.
+      assert.equal(
+        comment.body,
+        question.trim(),
+        `${label}: the question must persist without truncation`,
+      );
+      assert.equal(
+        requireTask(db, task.ref).status,
+        updated.status,
+        `${label}: the returned row must match a fresh read`,
+      );
+    }
+  });
+});
