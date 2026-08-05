@@ -116,6 +116,8 @@ const body = (value: unknown) => JSON.stringify(value);
 export const api = {
   state: () => request<State>('/state'),
   memories: () => request<MemoryDocument[]>('/memories'),
+  updateMemory: (id: string, input: Record<string, unknown>) =>
+    request<MemoryDocument>(`/memories/${id}`, { method: 'PATCH', body: body(input) }),
   task: (ref: string) => request<TaskDetail>(`/tasks/${ref}`),
   create: (input: Record<string, unknown>) =>
     request<Task>('/tasks', { method: 'POST', body: body(input) }),

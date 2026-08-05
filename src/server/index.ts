@@ -38,8 +38,11 @@ import {
   resolveMemoryPath,
   setStatus,
   staleLeases,
+  updateMemory,
   updateTask,
   type Db,
+  type MemoryKind,
+  type MemoryStatus,
   type Status,
 } from '../core/index.ts';
 
@@ -111,6 +114,22 @@ export function createApp(
 
   if (options.token) app.use('*', tokenGate(options.token));
 
+  const allMemories = () => {
+    const root = options.memoryRoot ?? resolveMemoryPath();
+    const memories = new Map(
+      listMemories(db, root, null, { all: true, limit: 1_000 }).map((memory) => [memory.id, memory]),
+    );
+    for (const project of listProjects(db, true)) {
+      for (const memory of listMemories(db, root, project, { all: true, limit: 1_000 })) {
+        memories.set(memory.id, memory);
+      }
+    }
+    return {
+      root,
+      memories: [...memories.values()].sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
+    };
+  };
+
   /** Everything the board needs for a first paint, in one round trip. */
   app.get('/api/state', (ctx) => {
     const includeClosed = ctx.req.query('closed') === '1';
@@ -131,18 +150,26 @@ export function createApp(
 
   /** All durable memory, across global and project scopes, for the board. */
   app.get('/api/memories', (ctx) => {
-    const root = options.memoryRoot ?? resolveMemoryPath();
-    const memories = new Map(
-      listMemories(db, root, null, { all: true, limit: 1_000 }).map((memory) => [memory.id, memory]),
-    );
-    for (const project of listProjects(db, true)) {
-      for (const memory of listMemories(db, root, project, { all: true, limit: 1_000 })) {
-        memories.set(memory.id, memory);
-      }
-    }
-    return ctx.json(
-      [...memories.values()].sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
-    );
+    return ctx.json(allMemories().memories);
+  });
+
+  app.patch('/api/memories/:id', async (ctx) => {
+    const { root, memories } = allMemories();
+    const current = memories.find((memory) => memory.id === ctx.req.param('id'));
+    if (!current) throw new Error(`No memory "${ctx.req.param('id')}".`);
+    const project = current.project_key
+      ? listProjects(db, true).find((item) => item.key === current.project_key) ?? null
+      : null;
+    const body = (await ctx.req.json()) as Body;
+    const updated = updateMemory(db, root, project, current.id, {
+      title: typeof body.title === 'string' ? body.title : undefined,
+      body: typeof body.body === 'string' ? body.body : undefined,
+      kind: typeof body.kind === 'string' ? body.kind as MemoryKind : undefined,
+      status: typeof body.status === 'string' ? body.status as MemoryStatus : undefined,
+      tags: Array.isArray(body.tags) ? body.tags.map(String) : undefined,
+      sources: Array.isArray(body.sources) ? body.sources.map(String) : undefined,
+    });
+    return ctx.json(updated);
   });
 
   app.get('/api/tasks/:ref', (ctx) => {

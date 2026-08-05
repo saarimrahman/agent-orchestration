@@ -48,7 +48,13 @@ function seed() {
 before(async () => {
   const { serve } = await import('@hono/node-server');
   uiMemoryRoot = mkdtempSync(join(tmpdir(), 'orch-ui-memory-'));
-  const app = createApp(seed(), { memoryRoot: uiMemoryRoot });
+  const db = seed();
+  rememberMemory(db, uiMemoryRoot, {
+    title: 'Browser memory',
+    body: 'Visible and editable from the board.',
+    project: null,
+  });
+  const app = createApp(db, { memoryRoot: uiMemoryRoot });
   await new Promise<void>((resolve) => {
     const instance = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' }, (info) => {
       server = { close: () => instance.close(), port: info.port };
@@ -84,7 +90,11 @@ describe('api', () => {
     const project = createProject(db, 'docs', 'Docs');
     const root = mkdtempSync(join(tmpdir(), 'orch-memory-api-'));
     try {
-      rememberMemory(db, root, { title: 'Shared rule', body: 'Use small commits.', project: null });
+      const shared = rememberMemory(db, root, {
+        title: 'Shared rule',
+        body: 'Use small commits.',
+        project: null,
+      });
       rememberMemory(db, root, {
         title: 'Old project note',
         body: 'Retained for history.',
@@ -92,7 +102,8 @@ describe('api', () => {
         project,
       });
 
-      const res = await createApp(db, { memoryRoot: root }).request('http://x/api/memories');
+      const app = createApp(db, { memoryRoot: root });
+      const res = await app.request('http://x/api/memories');
       assert.equal(res.status, 200);
       const memories = (await res.json()) as { title: string; project_key: string | null; status: string }[];
       assert.deepEqual(
@@ -102,6 +113,28 @@ describe('api', () => {
           ['Shared rule', null, 'active'],
         ],
       );
+
+      const patched = await app.request(`http://x/api/memories/${shared.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Shared convention',
+          body: 'Use small, verified commits.',
+          kind: 'playbook',
+          status: 'candidate',
+          tags: ['git'],
+          sources: ['docs-1'],
+        }),
+      });
+      assert.equal(patched.status, 200);
+      const updated = await patched.json() as Record<string, unknown>;
+      assert.equal(updated.id, shared.id);
+      assert.equal(updated.title, 'Shared convention');
+      assert.equal(updated.body, 'Use small, verified commits.');
+      assert.equal(updated.kind, 'playbook');
+      assert.equal(updated.status, 'candidate');
+      assert.deepEqual(updated.tags, ['git']);
+      assert.deepEqual(updated.sources, ['docs-1']);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -348,7 +381,13 @@ describe('web bundle', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     const memoryText = dom.window.document.getElementById('root')?.textContent ?? '';
     assert.match(memoryText, /Durable memory/);
-    assert.match(memoryText, /No memories here yet/);
+    assert.match(memoryText, /Browser memory/);
+    const editButton = [...dom.window.document.querySelectorAll('button')]
+      .find((button) => button.textContent?.trim() === 'Edit');
+    assert.ok(editButton, 'each memory should offer an edit action');
+    editButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /Edit memory/);
 
     dom.window.close();
   });
