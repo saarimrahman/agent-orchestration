@@ -37,6 +37,7 @@ export function TaskDrawer({
   const [snoozeDraft, setSnoozeDraft] = useState('');
   const [depDraft, setDepDraft] = useState('');
   const [tagDraft, setTagDraft] = useState('');
+  const [answerDraft, setAnswerDraft] = useState('');
 
   const load = async () => {
     try {
@@ -109,6 +110,45 @@ export function TaskDrawer({
           <p className="rounded-md border border-p0/30 bg-p0/10 px-2.5 py-2 text-[12px] text-p0">
             {error}
           </p>
+        )}
+
+        {task.question && (
+          <section className="rounded-lg border border-status-input/30 bg-status-input/8 p-3">
+            <p className="text-[10px] font-medium tracking-wider text-status-input uppercase">
+              {task.question_from ?? 'An agent'} is waiting on you
+            </p>
+            <div
+              className="prose-orch mt-1.5 text-[13px] text-ink-100"
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(task.question) }}
+            />
+            <textarea
+              value={answerDraft}
+              rows={3}
+              autoFocus
+              placeholder="Your answer — ⌘↵ to send it back to the queue"
+              onChange={(e) => setAnswerDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey) || !answerDraft.trim()) return;
+                void act(() => api.answer(task.ref, answerDraft));
+                setAnswerDraft('');
+              }}
+              className="mt-2 w-full resize-none rounded-md border border-ink-800 bg-ink-950
+                         px-2.5 py-1.5 text-[13px] text-ink-50 outline-none transition-colors
+                         placeholder:text-ink-600 focus:border-status-input"
+            />
+            <button
+              onClick={() => {
+                if (!answerDraft.trim()) return;
+                void act(() => api.answer(task.ref, answerDraft));
+                setAnswerDraft('');
+              }}
+              disabled={!answerDraft.trim()}
+              className="mt-2 rounded-md bg-status-input px-3 py-1.5 text-[12px] font-medium
+                         text-ink-950 transition-opacity hover:opacity-90 disabled:opacity-30"
+            >
+              Answer and unblock
+            </button>
+          </section>
         )}
 
         <textarea
@@ -359,7 +399,13 @@ export function TaskDrawer({
               <div key={c.id} className="flex gap-2.5">
                 <span
                   className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
-                    c.kind === 'progress' ? 'bg-accent' : 'bg-ink-600'
+                    c.kind === 'question'
+                      ? 'bg-status-input'
+                      : c.kind === 'answer'
+                        ? 'bg-status-done'
+                        : c.kind === 'progress'
+                          ? 'bg-accent'
+                          : 'bg-ink-600'
                   }`}
                 />
                 <div className="min-w-0 flex-1">
@@ -368,6 +414,16 @@ export function TaskDrawer({
                     {c.kind === 'progress' && (
                       <span className="rounded bg-accent/12 px-1.5 text-[10px] tracking-wide text-accent uppercase">
                         agent
+                      </span>
+                    )}
+                    {c.kind === 'question' && (
+                      <span className="rounded bg-status-input/15 px-1.5 text-[10px] tracking-wide text-status-input uppercase">
+                        asked
+                      </span>
+                    )}
+                    {c.kind === 'answer' && (
+                      <span className="rounded bg-status-done/15 px-1.5 text-[10px] tracking-wide text-status-done uppercase">
+                        answered
                       </span>
                     )}
                     <span className="text-[11px] text-ink-600">{relativeTime(c.created_at)}</span>
@@ -409,7 +465,18 @@ export function TaskDrawer({
           </div>
         )}
 
-        <div className="border-t border-ink-850 pt-3">
+        <div className="flex items-center gap-3 border-t border-ink-850 pt-3">
+          {!task.question && task.status !== 'done' && task.status !== 'cancelled' && (
+            <button
+              onClick={() => {
+                const question = prompt('What needs deciding before this can continue?');
+                if (question?.trim()) void act(() => api.ask(task.ref, question));
+              }}
+              className="text-[12px] text-ink-600 transition-colors hover:text-status-input"
+            >
+              Park with a question
+            </button>
+          )}
           <button
             onClick={() => {
               if (confirm(`Delete ${task.ref}? This cannot be undone.`)) {
@@ -419,7 +486,7 @@ export function TaskDrawer({
                 });
               }
             }}
-            className="text-[12px] text-ink-600 transition-colors hover:text-p0"
+            className="ml-auto text-[12px] text-ink-600 transition-colors hover:text-p0"
           >
             Delete task
           </button>

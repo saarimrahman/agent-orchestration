@@ -50,6 +50,17 @@ export function TaskCard({ task, onOpen, dimmed }: Props) {
 
       <p className="mt-1 text-[13px] leading-snug text-ink-50">{task.title}</p>
 
+      {task.question && (
+        <div className="mt-2 rounded-md border border-status-input/25 bg-status-input/8 px-2 py-1.5">
+          <p className="text-[10px] font-medium tracking-wider text-status-input uppercase">
+            {task.question_from ?? 'agent'} asks
+          </p>
+          <p className="mt-0.5 line-clamp-3 text-[12px] leading-snug text-ink-100">
+            {task.question}
+          </p>
+        </div>
+      )}
+
       {(task.tags.length > 0 || task.assignee || task.due_at || blocked || snoozed || stale) && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
           {blocked && (

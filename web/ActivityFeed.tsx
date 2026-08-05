@@ -4,6 +4,7 @@ const STATUS_TEXT: Record<string, string> = {
   backlog: 'text-status-backlog',
   ready: 'text-status-ready',
   in_progress: 'text-status-progress',
+  needs_input: 'text-status-input',
   review: 'text-status-review',
   done: 'text-status-done',
   cancelled: 'text-ink-500',
@@ -36,6 +37,20 @@ function describe(event: Event) {
           commented <span className="text-ink-200">{value}</span>
         </>
       );
+    case 'question':
+      return (
+        <>
+          <span className="text-status-input">asked</span>{' '}
+          <span className="text-ink-200">{value}</span>
+        </>
+      );
+    case 'answer':
+      return (
+        <>
+          <span className="text-status-done">answered</span>{' '}
+          <span className="text-ink-200">{value}</span>
+        </>
+      );
     case 'recurred_from':
       return <>rolled over from {event.old_value}</>;
     case 'deleted':
@@ -65,12 +80,13 @@ export function EventLine({
   onOpen?: (ref: string) => void;
 }) {
   const isAgentUpdate = event.field === 'progress' || event.field === 'claimed';
+  const wantsYou = event.field === 'question';
 
   return (
     <div className="flex items-baseline gap-2 text-[12px] leading-relaxed">
       <span
         className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
-          isAgentUpdate ? 'bg-accent' : 'bg-ink-700'
+          wantsYou ? 'bg-status-input' : isAgentUpdate ? 'bg-accent' : 'bg-ink-700'
         }`}
       />
       <span className="min-w-0 flex-1 text-ink-500">

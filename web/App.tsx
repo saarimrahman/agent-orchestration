@@ -13,10 +13,19 @@ import { Board } from './Board.tsx';
 import { NewTask } from './NewTask.tsx';
 import { TaskDrawer } from './TaskDrawer.tsx';
 
-type ViewId = 'board' | 'today' | 'overdue' | 'ready' | 'mine' | 'snoozed' | 'done';
+type ViewId =
+  | 'board'
+  | 'needs_input'
+  | 'today'
+  | 'overdue'
+  | 'ready'
+  | 'mine'
+  | 'snoozed'
+  | 'done';
 
 const VIEWS: { id: ViewId; label: string }[] = [
   { id: 'board', label: 'All open' },
+  { id: 'needs_input', label: 'Needs you' },
   { id: 'today', label: 'Due today' },
   { id: 'overdue', label: 'Overdue' },
   { id: 'ready', label: 'Ready' },
@@ -56,6 +65,8 @@ export function App() {
         if (!haystack.includes(query.toLowerCase())) return false;
       }
       switch (view) {
+        case 'needs_input':
+          return task.status === 'needs_input';
         case 'today':
           return task.due_at !== null && new Date(task.due_at).getTime() <= endOfToday();
         case 'overdue':
@@ -83,8 +94,9 @@ export function App() {
   };
 
   const counts = useMemo(() => {
-    if (!state) return { overdue: 0, ready: 0, progress: 0, stale: 0 };
+    if (!state) return { needsInput: 0, overdue: 0, ready: 0, progress: 0, stale: 0 };
     return {
+      needsInput: state.needs_input.length,
       overdue: state.tasks.filter(isOverdue).length,
       ready: state.ready.length,
       progress: state.tasks.filter((t) => t.status === 'in_progress').length,
@@ -123,15 +135,18 @@ export function App() {
               active={view === v.id}
               onClick={() => setView(v.id)}
               badge={
-                v.id === 'overdue'
-                  ? counts.overdue
+                v.id === 'needs_input'
+                  ? counts.needsInput
+                  : v.id === 'overdue'
+                    ? counts.overdue
                   : v.id === 'ready'
                     ? counts.ready
-                    : v.id === 'mine'
-                      ? counts.progress
-                      : undefined
+                      : v.id === 'mine'
+                        ? counts.progress
+                        : undefined
               }
               danger={v.id === 'overdue'}
+              attention={v.id === 'needs_input'}
             >
               {v.label}
             </SidebarButton>
@@ -216,6 +231,22 @@ export function App() {
           </button>
         </header>
 
+        {counts.needsInput > 0 && view !== 'needs_input' && (
+          <button
+            onClick={() => setView('needs_input')}
+            className="mx-4 mb-2 flex items-center gap-2 rounded-lg border border-status-input/30
+                       bg-status-input/8 px-3 py-2 text-left transition-colors
+                       hover:bg-status-input/14"
+          >
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-status-input" />
+            <span className="text-[12.5px] text-ink-100">
+              {counts.needsInput} task{counts.needsInput > 1 ? 's are' : ' is'} waiting on your
+              answer
+            </span>
+            <span className="ml-auto text-[11px] text-status-input">Review →</span>
+          </button>
+        )}
+
         <div className="min-h-0 flex-1">
           <Board tasks={tasks} onOpen={setSelected} onMove={move} />
         </div>
@@ -266,6 +297,7 @@ function SidebarButton({
   badge,
   dot,
   danger,
+  attention,
 }: {
   active: boolean;
   onClick: () => void;
@@ -273,6 +305,7 @@ function SidebarButton({
   badge?: number;
   dot?: string;
   danger?: boolean;
+  attention?: boolean;
 }) {
   return (
     <button
@@ -285,7 +318,15 @@ function SidebarButton({
       {dot && <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: dot }} />}
       <span className="truncate">{children}</span>
       {badge !== undefined && badge > 0 && (
-        <span className={`ml-auto text-[11px] ${danger ? 'text-p0' : 'text-ink-600'}`}>
+        <span
+          className={`ml-auto text-[11px] ${
+            attention
+              ? 'rounded bg-status-input/18 px-1.5 font-medium text-status-input'
+              : danger
+                ? 'text-p0'
+                : 'text-ink-600'
+          }`}
+        >
           {badge}
         </span>
       )}

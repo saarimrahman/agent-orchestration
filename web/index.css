@@ -28,6 +28,7 @@
   --color-status-backlog: #6b7280;
   --color-status-ready: #4cc2c4;
   --color-status-progress: #e0a458;
+  --color-status-input: #e879a8;
   --color-status-review: #b47ce0;
   --color-status-done: #5fb87a;
 }

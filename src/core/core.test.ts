@@ -16,7 +16,14 @@ import {
   staleLeases,
   updateTask,
 } from './tasks.ts';
-import { addComment, digest, listComments } from './activity.ts';
+import {
+  addComment,
+  answerInput,
+  askForInput,
+  awaitingInput,
+  digest,
+  listComments,
+} from './activity.ts';
 import { mergeAgentsFile } from './instructions.ts';
 import { nextCronFire, parseDuration, parseWhen } from './time.ts';
 
@@ -242,6 +249,107 @@ describe('comments and history', () => {
   test('rejects empty comments', () => {
     const task = add('Work');
     assert.throws(() => addComment(db, task.id, 'alice', '   '), /needs a body/);
+  });
+});
+
+describe('waiting on a human', () => {
+  test('asking parks the task, drops the lease, and pulls it off the queue', () => {
+    const task = add('Ambiguous work');
+    claimTask(db, task.id, 'alice');
+
+    const { task: parked } = askForInput(db, task.id, 'alice', 'Postgres or SQLite?');
+
+    assert.equal(parked.status, 'needs_input');
+    assert.equal(parked.assignee, null, 'the lease is released so it is not counted in flight');
+    assert.equal(parked.lease_expires_at, null);
+    assert.equal(parked.question, 'Postgres or SQLite?');
+    assert.equal(parked.question_from, 'alice');
+    assert.deepEqual(readyTasks(db), [], 'an unanswered question is not claimable');
+  });
+
+  test('no agent can claim a task that is waiting on a human', () => {
+    const task = add('Ambiguous work');
+    askForInput(db, task.id, 'alice', 'Which one?');
+
+    assert.equal(claimTask(db, task.id, 'bob'), null);
+    assert.equal(claimNext(db, 'bob'), null);
+  });
+
+  test('answering returns it to the queue with the reply in the thread', () => {
+    const task = add('Ambiguous work');
+    askForInput(db, task.id, 'alice', 'Postgres or SQLite?');
+
+    const { task: answered } = answerInput(db, task.id, 'saarim', 'SQLite.');
+
+    assert.equal(answered.status, 'ready');
+    assert.equal(answered.question, null, 'the question stops being outstanding');
+    assert.deepEqual(refs(readyTasks(db)), [task.ref]);
+    assert.deepEqual(
+      listComments(db, task.id).map((c) => [c.kind, c.author, c.body]),
+      [
+        ['question', 'alice', 'Postgres or SQLite?'],
+        ['answer', 'saarim', 'SQLite.'],
+      ],
+    );
+  });
+
+  test('the question history survives, it is just no longer pending', () => {
+    const task = add('Ambiguous work');
+    askForInput(db, task.id, 'alice', 'Which one?');
+    answerInput(db, task.id, 'saarim', 'This one.');
+
+    assert.equal(requireTask(db, task.ref).question, null);
+    assert.equal(listComments(db, task.id).length, 2);
+  });
+
+  test('a second round of question and answer works', () => {
+    const task = add('Ambiguous work');
+    askForInput(db, task.id, 'alice', 'First?');
+    answerInput(db, task.id, 'saarim', 'Yes.');
+    askForInput(db, task.id, 'bob', 'Second?');
+
+    const pending = requireTask(db, task.ref);
+    assert.equal(pending.question, 'Second?', 'the newest question is the pending one');
+    assert.equal(pending.question_from, 'bob');
+  });
+
+  test('awaitingInput is the human inbox', () => {
+    const asked = add('Needs a decision');
+    add('Ordinary work');
+    askForInput(db, asked.id, 'alice', 'Which approach?');
+
+    assert.deepEqual(refs(awaitingInput(db)), [asked.ref]);
+  });
+
+  test('a parked task still blocks its dependents', () => {
+    const blocker = add('Blocker');
+    const dependent = add('Dependent', { dependsOn: [blocker.ref] });
+    askForInput(db, blocker.id, 'alice', 'Which way?');
+
+    assert.deepEqual(requireTask(db, dependent.ref).blocked_by, [blocker.ref]);
+    assert.deepEqual(readyTasks(db), []);
+  });
+
+  test('you cannot ask a question on a closed task', () => {
+    const task = add('Finished');
+    setStatus(db, task.id, 'done', 'test');
+
+    assert.throws(() => askForInput(db, task.id, 'alice', 'Too late?'), /already done/);
+  });
+
+  test('empty questions and answers are rejected', () => {
+    const task = add('Work');
+    assert.throws(() => askForInput(db, task.id, 'alice', '  '), /What do you need to know/);
+    askForInput(db, task.id, 'alice', 'Real question?');
+    assert.throws(() => answerInput(db, task.id, 'saarim', ''), /needs a body/);
+  });
+
+  test('answering a task that was not asking just leaves a comment', () => {
+    const task = add('Work');
+    const { task: after } = answerInput(db, task.id, 'saarim', 'FYI');
+
+    assert.equal(after.status, 'backlog', 'status is untouched when nothing was pending');
+    assert.equal(listComments(db, task.id).length, 1);
   });
 });
 

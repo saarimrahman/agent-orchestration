@@ -24,15 +24,22 @@ and close items on it. Every read command takes \`--json\`.
 
 ### When you cannot finish
 
+- **Needs a decision only a human can make**: \`orch ask <ref> "<question>"\`.
+  This is the important one. It parks the task in \`needs_input\`, releases your
+  lease, and puts it in front of the human on the board. Do not guess at a
+  product decision, an ambiguous spec, or anything destructive — ask.
+  Ask one specific question with the options you see, not "what should I do?".
 - Blocked on other work: \`orch add "<the blocker>"\` then
   \`orch dep add <ref> <blocker-ref>\` and \`orch release <ref>\`. The task leaves
   the queue until the blocker closes, then returns on its own.
-- Needs a decision from a human: \`orch comment <ref> "<the question>"\` and
-  \`orch release <ref>\`.
 - Not actionable yet: \`orch snooze <ref> 3d\`. It disappears and comes back.
 
-Always \`release\` what you cannot finish. A held task is invisible to every
-other agent until its lease expires.
+Always \`ask\` or \`release\` what you cannot finish. A held task is invisible to
+every other agent until its lease expires.
+
+A task in \`needs_input\` is off the queue, so \`orch next\` will never hand you
+a question you cannot answer. Once a human runs \`orch answer\`, it returns to
+the queue with their reply in the thread — read the comments before restarting.
 
 ### Adding work
 
@@ -49,8 +56,10 @@ closing it creates the next occurrence automatically.
 - \`orch ready --json\` — what is claimable right now
 - \`orch ls --json\` — everything open, with filters (\`--status\`, \`--tag\`,
   \`--project\`, \`--assignee\`, \`--due today\`)
-- \`orch digest --json\` — overdue, due today, ready, in progress, and abandoned
-  leases in one payload. Use this when you are triaging rather than executing.
+- \`orch inbox --json\` — everything waiting on a human, with the question
+- \`orch digest --json\` — waiting-on-human, overdue, due today, ready, in
+  progress, and abandoned leases in one payload. Use this when you are triaging
+  rather than executing.
 
 ### Rules
 

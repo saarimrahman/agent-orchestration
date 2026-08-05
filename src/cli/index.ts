@@ -7,8 +7,11 @@ import {
   WORKFLOW,
   addComment,
   addDep,
+  answerInput,
   archiveProject,
+  askForInput,
   attachTag,
+  awaitingInput,
   claimNext,
   claimTask,
   createProject,
@@ -54,7 +57,12 @@ Queue
   next [--claim]            The top of the queue, optionally taken atomically
   claim <ref>               Take a specific task
   release <ref>             Put a held task back
-  digest                    Overdue, due today, ready, in progress, stale leases
+  digest                    Waiting on you, overdue, due today, ready, in progress
+
+Waiting on a human
+  ask <ref> "<question>"    Hand the task back with a question (agents use this)
+  answer <ref> "<answer>"   Answer it and return the task to the queue
+  inbox                     Everything currently waiting on you
 
 Tasks
   add "<title>"             Create a task
@@ -94,6 +102,23 @@ function actor(p: Parsed): string {
     str(p, 'as') ??
     process.env.ORCH_ACTOR ??
     process.env.ORCH_AGENT ??
+    userInfo().username
+  );
+}
+
+/**
+ * Who to credit for an action on a task already in hand. Falls back to the
+ * current assignee before the OS user, so an agent that claimed as `bruno` and
+ * then ran `orch ask` without repeating `--agent` is still recorded as bruno
+ * rather than as whoever owns the shell.
+ */
+function actorFor(p: Parsed, task: TaskView): string {
+  return (
+    str(p, 'agent') ??
+    str(p, 'as') ??
+    process.env.ORCH_ACTOR ??
+    process.env.ORCH_AGENT ??
+    task.assignee ??
     userInfo().username
   );
 }
@@ -285,7 +310,7 @@ function cmdComment(db: Db, p: Parsed): void {
   const comment = addComment(
     db,
     task.id,
-    actor(p),
+    actorFor(p, task),
     body,
     bool(p, 'progress') ? 'progress' : 'note',
   );
@@ -295,9 +320,10 @@ function cmdComment(db: Db, p: Parsed): void {
 function cmdStatus(db: Db, p: Parsed, status: Status): void {
   const task = requireTask(db, requirePositional(p, 0, `orch ${status} <ref>`));
   const note = str(p, 'message') ?? p.positional.slice(1).join(' ');
-  if (note.trim()) addComment(db, task.id, actor(p), note, 'progress');
+  const who = actorFor(p, task);
+  if (note.trim()) addComment(db, task.id, who, note, 'progress');
 
-  const { task: updated, recurrence } = setStatus(db, task.id, status, actor(p));
+  const { task: updated, recurrence } = setStatus(db, task.id, status, who);
   out(p, { task: updated, recurrence }, () => {
     const lines = [`${c.bold(updated.ref)} → ${status}`];
     if (recurrence) {
@@ -312,6 +338,51 @@ function cmdStatus(db: Db, p: Parsed, status: Status): void {
       lines.push(c.dim(`unblocked ${unblocked.map((t) => t.ref).join(', ')}`));
     }
     return lines.join('\n');
+  });
+}
+
+function cmdAsk(db: Db, p: Parsed): void {
+  const task = requireTask(db, requirePositional(p, 0, 'orch ask <ref> "<question>"'));
+  const question = str(p, 'message') ?? p.positional.slice(1).join(' ');
+  if (!question.trim()) {
+    throw new CliError('What do you need to know?  orch ask demo-3 "Which auth flow?"');
+  }
+
+  const { task: updated } = askForInput(db, task.id, actorFor(p, task), question);
+  out(p, updated, () =>
+    [
+      `${c.bold(updated.ref)} → ${c.magenta('needs_input')}`,
+      c.dim('Waiting on a human. It has left the queue and the lease is released.'),
+    ].join('\n'),
+  );
+}
+
+function cmdAnswer(db: Db, p: Parsed): void {
+  const task = requireTask(db, requirePositional(p, 0, 'orch answer <ref> "<answer>"'));
+  const answer = str(p, 'message') ?? p.positional.slice(1).join(' ');
+  if (!answer.trim()) throw new CliError('What is the answer?');
+
+  const { task: updated } = answerInput(db, task.id, actor(p), answer);
+  out(p, updated, () =>
+    `${c.bold(updated.ref)} → ${updated.status}${
+      updated.status === 'ready' ? c.dim('  (back on the queue)') : ''
+    }`,
+  );
+}
+
+function cmdAsking(db: Db, p: Parsed): void {
+  const tasks = awaitingInput(db, str(p, 'project'));
+  out(p, tasks, () => {
+    if (!tasks.length) return c.dim('Nothing is waiting on you.');
+    return tasks
+      .map((t) =>
+        [
+          `${c.bold(t.ref)}  ${t.title}`,
+          `  ${c.magenta(t.question_from ?? 'agent')} asks: ${t.question ?? ''}`,
+          c.dim(`  answer with: orch answer ${t.ref} "..."`),
+        ].join('\n'),
+      )
+      .join('\n\n');
   });
 }
 
@@ -431,6 +502,7 @@ function cmdDigest(db: Db, p: Parsed): void {
       tasks.length ? `${color(c.bold(label))}\n${taskTable(tasks)}` : '';
 
     const parts = [
+      section(`Waiting on you (${report.needs_input.length})`, report.needs_input, c.magenta),
       section(`Overdue (${report.overdue.length})`, report.overdue, c.red),
       section(`Due today (${report.due_today.length})`, report.due_today, c.yellow),
       section(`Ready (${report.ready.length})`, report.ready, c.cyan),
@@ -506,6 +578,9 @@ export async function main(argv: string[]): Promise<number> {
       case 'done': case 'close': cmdStatus(db, p, 'done'); return 0;
       case 'cancel': cmdStatus(db, p, 'cancelled'); return 0;
       case 'reopen': cmdStatus(db, p, 'ready'); return 0;
+      case 'ask': cmdAsk(db, p); return 0;
+      case 'answer': case 'reply': cmdAnswer(db, p); return 0;
+      case 'asking': case 'inbox': cmdAsking(db, p); return 0;
       case 'snooze': cmdSnooze(db, p); return 0;
       case 'edit': cmdEdit(db, p); return 0;
       case 'rm': case 'delete': cmdRm(db, p); return 0;

@@ -69,10 +69,40 @@ exit code without parsing anything. Every read command takes `--json`.
 When an agent can't finish:
 
 ```bash
-orch dep add demo-1 demo-9   # found a blocker
-orch release demo-1          # give it back
-orch snooze demo-1 3d        # not actionable yet
+orch ask demo-1 "Cookies or JWT?"  # needs a human decision — see below
+orch dep add demo-1 demo-9         # found a blocker
+orch release demo-1                # give it back
+orch snooze demo-1 3d              # not actionable yet
 ```
+
+## When an agent needs you
+
+The case that matters most in practice: an agent hits a decision only a human
+can make. Guessing at it is worse than stopping.
+
+```bash
+orch ask demo-1 "Session cookies or JWT? Mobile needs offline auth."
+```
+
+That moves the task to `needs_input`, drops the lease, and takes it off the
+queue — so `orch next` will never hand another agent a question it can't answer.
+On the board it lands in a **Needs you** column with the question readable on
+the card, plus a banner at the top of the board and a count in the sidebar.
+
+You answer from the drawer, or from the terminal:
+
+```bash
+orch inbox                                    # everything waiting on you
+orch answer demo-1 "JWT. Refresh tokens in a follow-up."
+```
+
+The task returns to `ready` with your reply in the thread. It goes back to the
+queue rather than to whoever asked, because by the time you reply that agent's
+session is usually gone — whichever agent picks it up next reads the answer in
+the comments.
+
+`orch digest` leads with this section, so a cron'd triage agent sees blocked
+humans before anything else.
 
 ## Scheduling
 
@@ -104,7 +134,10 @@ leases in one payload — sized to drop straight into a prompt.
 | `orch ready` | Everything claimable right now |
 | `orch next [--claim]` | Top of the queue, optionally taken atomically |
 | `orch claim <ref>` / `release <ref>` | Lease control |
-| `orch digest` | Triage payload: overdue, due today, ready, in progress, stale |
+| `orch digest` | Triage payload: waiting on you, overdue, due today, ready, in progress |
+| `orch ask <ref> "<q>"` | Park a task with a question for a human |
+| `orch answer <ref> "<a>"` | Answer it and return the task to the queue |
+| `orch inbox` | Everything waiting on you |
 | `orch add "<title>"` | Create — `-p` project, `-P` priority, `--due`, `--tag`, `--dep`, `--recur` |
 | `orch ls` | List — `--status`, `--tag`, `--project`, `--assignee`, `--due today`, `--all` |
 | `orch show <ref>` | Detail, comments, and history |
@@ -130,6 +163,9 @@ dependency is closed; any snooze has elapsed; and nobody holds it. There is no
 `blocked` status — blocked is derived from the dependency graph, so a status
 field can never disagree with reality.
 
+`needs_input` *is* a real status, unlike `blocked`. Nothing can derive the fact
+that an agent is stuck on a human judgement call — the agent has to assert it.
+
 **Claiming is atomic.** The entire ready predicate lives in the claim's `WHERE`
 clause, so when several agents poll at once, exactly one wins and the rest see a
 clean failure. `orch next --claim` walks down the queue rather than failing when
@@ -146,9 +182,10 @@ back at the one you closed — so the history survives.
 ## The board
 
 `orch ui` serves on `127.0.0.1` only. Kanban columns with drag-and-drop, a
-detail drawer with a comment thread where agent progress is badged separately
-from your own notes, saved views (due today, overdue, ready, snoozed), and a
-global activity feed of what every agent has been doing.
+detail drawer with a comment thread where agent progress, questions, and
+answers are each badged distinctly, saved views (needs you, due today,
+overdue, ready, snoozed), and a global activity feed of what every agent has
+been doing.
 
 It updates live from writes made by *any* process, so a CLI command in another
 terminal moves the board within a second — the server watches the append-only
@@ -168,15 +205,15 @@ who you are in the activity log when you omit `--agent`.
 ## Tests
 
 ```bash
-npm test        # 38 tests: queue semantics, claim contention, recurrence, API, UI render
+npm test        # 49 tests: queue semantics, claim contention, recurrence, API, UI render
 npm run typecheck
 ```
 
 The suite covers the parts that are subtly wrong if untested: ready-queue
 filtering, concurrent claims on one task, lease expiry and reclaim, dependency
-cycles, and recurrence firing exactly once. The UI test bundles the real app and
-renders it against a real server in jsdom, which catches render crashes without
-needing a browser.
+cycles, recurrence firing exactly once, and the full ask/answer handoff. The UI
+test bundles the real app and renders it against a real server in jsdom, which
+catches render crashes without needing a browser.
 
 ## Not included
 

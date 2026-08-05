@@ -4,7 +4,14 @@ import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
 import { build } from 'esbuild';
 
-import { openDb, createProject, createTask, addComment, claimTask } from '../core/index.ts';
+import {
+  addComment,
+  askForInput,
+  claimTask,
+  createProject,
+  createTask,
+  openDb,
+} from '../core/index.ts';
 import { createApp } from './index.ts';
 
 /**
@@ -28,6 +35,9 @@ function seed() {
   createTask(db, { title: 'Ship it', project: 'demo', actor: 'you', dependsOn: [parser.ref] });
   claimTask(db, parser.id, 'alice');
   addComment(db, parser.id, 'alice', 'skeleton done', 'progress');
+
+  const schema = createTask(db, { title: 'Pick a schema', project: 'demo', actor: 'you' });
+  askForInput(db, schema.id, 'bruno', 'Postgres or SQLite for the store?');
   return db;
 }
 
@@ -106,6 +116,33 @@ describe('api', () => {
     assert.match(body.error, /Existing projects/);
   });
 
+  test('an agent can park a task with a question, and a human can clear it', async () => {
+    const created = await call('/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ title: 'Needs a call', project: 'demo' }),
+    });
+    const ref = created.body.ref;
+
+    const parked = await call(`/tasks/${ref}/ask`, {
+      method: 'POST',
+      body: JSON.stringify({ body: 'Which region?', actor: 'bruno' }),
+    });
+    assert.equal(parked.body.status, 'needs_input');
+    assert.equal(parked.body.question, 'Which region?');
+    assert.ok(
+      (await call('/state')).body.needs_input.includes(ref),
+      'the board should list it as waiting on a human',
+    );
+
+    const answered = await call(`/tasks/${ref}/answer`, {
+      method: 'POST',
+      body: JSON.stringify({ body: 'us-east-1', actor: 'you' }),
+    });
+    assert.equal(answered.body.status, 'ready');
+    assert.equal(answered.body.question, null);
+    assert.ok(!(await call('/state')).body.needs_input.includes(ref));
+  });
+
   test('the change marker advances on every write', async () => {
     const before = (await call('/state')).body.marker;
     await call('/tasks', { method: 'POST', body: JSON.stringify({ title: 'tick', project: 'demo' }) });
@@ -163,6 +200,13 @@ describe('web bundle', () => {
     assert.match(text, /Write the parser/, 'seeded tasks should render');
     assert.match(text, /In progress/, 'status columns should render');
     assert.match(text, /alice/, 'the activity feed should show agent actions');
+    assert.match(text, /Needs you/, 'the waiting-on-a-human column should render');
+    assert.match(
+      text,
+      /Postgres or SQLite for the store\?/,
+      'the question should be readable on the board without opening the task',
+    );
+    assert.match(text, /waiting on your answer/, 'the banner should call out pending questions');
 
     dom.window.close();
   });

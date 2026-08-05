@@ -10,6 +10,9 @@ import { fileURLToPath } from 'node:url';
 import {
   addComment,
   addDep,
+  answerInput,
+  askForInput,
+  awaitingInput,
   changeMarker,
   claimTask,
   createProject,
@@ -72,6 +75,7 @@ export function createApp(db: Db) {
         ? []
         : listTasks(db, { status: ['done', 'cancelled'], limit: 40 }),
       ready: readyTasks(db).map((t) => t.ref),
+      needs_input: awaitingInput(db).map((t) => t.ref),
       stale_leases: staleLeases(db).map((t) => t.ref),
       events: recentEvents(db, 60),
       marker: changeMarker(db),
@@ -156,6 +160,20 @@ export function createApp(db: Db) {
       body.kind === 'progress' ? 'progress' : 'note',
     );
     return ctx.json(comment, 201);
+  });
+
+  app.post('/api/tasks/:ref/ask', async (ctx) => {
+    const task = requireTask(db, ctx.req.param('ref'));
+    const body = (await ctx.req.json()) as Body;
+    const result = askForInput(db, task.id, asString(body.actor) ?? 'web', String(body.body ?? ''));
+    return ctx.json(result.task);
+  });
+
+  app.post('/api/tasks/:ref/answer', async (ctx) => {
+    const task = requireTask(db, ctx.req.param('ref'));
+    const body = (await ctx.req.json()) as Body;
+    const result = answerInput(db, task.id, asString(body.actor) ?? 'you', String(body.body ?? ''));
+    return ctx.json(result.task);
   });
 
   app.post('/api/tasks/:ref/claim', async (ctx) => {

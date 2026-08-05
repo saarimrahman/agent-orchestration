@@ -22,6 +22,7 @@ const STATUS_COLOR: Record<string, (s: string) => string> = {
   backlog: c.gray,
   ready: c.cyan,
   in_progress: c.yellow,
+  needs_input: c.magenta,
   review: c.magenta,
   done: c.green,
   cancelled: c.gray,
@@ -105,6 +106,12 @@ export function taskDetail(
   }
   if (times.length) out.push(times.join('  '));
 
+  if (task.question) {
+    out.push('', c.magenta(`${task.question_from ?? 'An agent'} is waiting on you:`));
+    for (const line of task.question.split('\n')) out.push(`  ${line}`);
+    out.push(c.dim(`  answer with: orch answer ${task.ref} "..."`));
+  }
+
   if (task.blocked_by.length) {
     out.push(c.red(`blocked by ${task.blocked_by.join(', ')}`));
   }
@@ -114,8 +121,13 @@ export function taskDetail(
 
   if (comments.length) {
     out.push('', c.bold('Comments'));
+    const badges: Record<string, string> = {
+      progress: c.cyan('[progress]'),
+      question: c.magenta('[asked]'),
+      answer: c.green('[answered]'),
+    };
     for (const comment of comments) {
-      const badge = comment.kind === 'progress' ? c.cyan('[progress]') : '';
+      const badge = badges[comment.kind] ?? '';
       out.push(
         `  ${c.bold(comment.author)} ${badge} ${c.dim(relative(comment.created_at))}`.trimEnd(),
       );
@@ -150,6 +162,10 @@ export function describeEvent(event: EventView): string {
       return `${who} reported: ${truncate(event.new_value ?? '', 70)}`;
     case 'comment':
       return `${who} commented: ${truncate(event.new_value ?? '', 70)}`;
+    case 'question':
+      return `${who} ${c.magenta('asked')}: ${truncate(event.new_value ?? '', 70)}`;
+    case 'answer':
+      return `${who} ${c.green('answered')}: ${truncate(event.new_value ?? '', 70)}`;
     case 'recurred_from':
       return `${who} rolled over from ${event.old_value}`;
     case 'deleted':

@@ -55,7 +55,11 @@ const SELECT_VIEW = `
          AND b.status NOT IN (${CLOSED_LIST})) AS blocked_by_raw,
     (SELECT group_concat(o.ref, '${SEP}') FROM deps d JOIN tasks o ON o.id = d.task_id
        WHERE d.depends_on_id = t.id AND d.kind = 'blocks') AS blocks_raw,
-    (SELECT COUNT(*) FROM comments c WHERE c.task_id = t.id) AS comment_count
+    (SELECT COUNT(*) FROM comments c WHERE c.task_id = t.id) AS comment_count,
+    (SELECT c.body FROM comments c WHERE c.task_id = t.id AND c.kind = 'question'
+       ORDER BY c.id DESC LIMIT 1) AS question,
+    (SELECT c.author FROM comments c WHERE c.task_id = t.id AND c.kind = 'question'
+       ORDER BY c.id DESC LIMIT 1) AS question_from
   FROM tasks t JOIN projects p ON p.id = t.project_id
 `;
 
@@ -64,17 +68,23 @@ function split(raw: unknown): string[] {
 }
 
 function toView(row: Record<string, unknown>): TaskView {
-  const { tags_raw, blocked_by_raw, blocks_raw, ...rest } = row;
+  const { tags_raw, blocked_by_raw, blocks_raw, question, question_from, ...rest } = row;
+  const base = rest as unknown as Task & {
+    project_key: string;
+    project_name: string;
+    project_color: string;
+    comment_count: number;
+  };
+  // A question only counts as outstanding while the task is actually waiting on
+  // one; once answered, the comment stays in the thread but stops being a prompt.
+  const waiting = base.status === 'needs_input';
   return {
-    ...(rest as unknown as Task & {
-      project_key: string;
-      project_name: string;
-      project_color: string;
-      comment_count: number;
-    }),
+    ...base,
     tags: split(tags_raw),
     blocked_by: split(blocked_by_raw),
     blocks: split(blocks_raw),
+    question: waiting ? ((question as string | null) ?? null) : null,
+    question_from: waiting ? ((question_from as string | null) ?? null) : null,
   };
 }
 

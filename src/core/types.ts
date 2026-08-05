@@ -2,12 +2,20 @@ export const STATUSES = [
   'backlog',
   'ready',
   'in_progress',
+  'needs_input',
   'review',
   'done',
   'cancelled',
 ] as const;
 
 export type Status = (typeof STATUSES)[number];
+
+/**
+ * An agent has asked a question and cannot continue until a human answers.
+ * Unlike `blocked`, this is not derivable from anything — the agent has to
+ * assert it — which is why it is a real status rather than a computed one.
+ */
+export const NEEDS_INPUT: Status = 'needs_input';
 
 /** Statuses that mean a task no longer blocks anything downstream. */
 export const CLOSED_STATUSES: Status[] = ['done', 'cancelled'];
@@ -18,7 +26,7 @@ export const OPEN_QUEUE_STATUSES: Status[] = ['backlog', 'ready'];
 export const DEP_KINDS = ['blocks', 'relates', 'parent'] as const;
 export type DepKind = (typeof DEP_KINDS)[number];
 
-export const COMMENT_KINDS = ['note', 'progress', 'system'] as const;
+export const COMMENT_KINDS = ['note', 'progress', 'question', 'answer', 'system'] as const;
 export type CommentKind = (typeof COMMENT_KINDS)[number];
 
 export const PRIORITY_LABELS = ['P0', 'P1', 'P2', 'P3'] as const;
@@ -63,6 +71,10 @@ export type TaskView = Task & {
   /** Tasks whose `blocks` dependency points at this one. */
   blocks: string[];
   comment_count: number;
+  /** The outstanding question, when the task is waiting on a human. */
+  question: string | null;
+  /** Who asked it. */
+  question_from: string | null;
 };
 
 export type Comment = {

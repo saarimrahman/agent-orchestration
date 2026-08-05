@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-export type Status = 'backlog' | 'ready' | 'in_progress' | 'review' | 'done' | 'cancelled';
+export type Status =
+  | 'backlog'
+  | 'ready'
+  | 'in_progress'
+  | 'needs_input'
+  | 'review'
+  | 'done'
+  | 'cancelled';
 
 export type Task = {
   id: number;
@@ -26,13 +33,15 @@ export type Task = {
   blocked_by: string[];
   blocks: string[];
   comment_count: number;
+  question: string | null;
+  question_from: string | null;
 };
 
 export type Comment = {
   id: number;
   task_id: number;
   author: string;
-  kind: 'note' | 'progress' | 'system';
+  kind: 'note' | 'progress' | 'question' | 'answer' | 'system';
   body: string;
   created_at: string;
 };
@@ -63,6 +72,7 @@ export type State = {
   tasks: Task[];
   recently_closed: Task[];
   ready: string[];
+  needs_input: string[];
   stale_leases: string[];
   events: Event[];
   marker: number;
@@ -100,6 +110,10 @@ export const api = {
   claim: (ref: string, agent = 'you') =>
     request<Task>(`/tasks/${ref}/claim`, { method: 'POST', body: body({ agent }) }),
   release: (ref: string) => request<Task>(`/tasks/${ref}/release`, { method: 'POST' }),
+  ask: (ref: string, text: string) =>
+    request<Task>(`/tasks/${ref}/ask`, { method: 'POST', body: body({ body: text, actor: 'you' }) }),
+  answer: (ref: string, text: string) =>
+    request<Task>(`/tasks/${ref}/answer`, { method: 'POST', body: body({ body: text, actor: 'you' }) }),
   addDep: (ref: string, blocker: string) =>
     request<Task>(`/tasks/${ref}/deps`, { method: 'POST', body: body({ blocker }) }),
   removeDep: (ref: string, blocker: string) =>
@@ -195,6 +209,11 @@ export const COLUMNS: { status: Status; label: string; color: string }[] = [
   { status: 'backlog', label: 'Backlog', color: 'var(--color-status-backlog)' },
   { status: 'ready', label: 'Ready', color: 'var(--color-status-ready)' },
   { status: 'in_progress', label: 'In progress', color: 'var(--color-status-progress)' },
+  { status: 'needs_input', label: 'Needs you', color: 'var(--color-status-input)' },
   { status: 'review', label: 'Review', color: 'var(--color-status-review)' },
   { status: 'done', label: 'Done', color: 'var(--color-status-done)' },
 ];
+
+export function needsInput(task: Task): boolean {
+  return task.status === 'needs_input';
+}
