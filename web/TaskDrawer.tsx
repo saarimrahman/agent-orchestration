@@ -1,3 +1,18 @@
+import {
+  CalendarClock,
+  CircleHelp,
+  Clock3,
+  FileText,
+  Link2,
+  MessageSquare,
+  Pencil,
+  Save,
+  Send,
+  Tag,
+  Trash2,
+  UserRound,
+  X,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import {
@@ -9,12 +24,16 @@ import {
   type TaskDetail,
 } from './api.ts';
 import { EventLine } from './ActivityFeed.tsx';
+import { PanelResizeHandle, useResizablePanel } from './components/ResizablePanel.tsx';
+import { Button } from './components/ui/button.tsx';
+import { cn } from './lib/utils.ts';
 import { renderMarkdown } from './markdown.ts';
 
-const label = 'text-[11px] font-medium tracking-wide text-ink-500 uppercase';
+const label = 'text-[9.5px] font-semibold tracking-[0.09em] text-ink-600 uppercase';
 const field =
-  'w-full rounded-md border border-ink-800 bg-ink-900 px-2.5 py-1.5 text-[13px] text-ink-50 ' +
-  'outline-none transition-colors placeholder:text-ink-600 focus:border-accent-dim';
+  'h-9 w-full rounded-lg border border-white/[.065] bg-ink-950/60 px-3 text-[12px] text-ink-50 ' +
+  'shadow-sm outline-none transition-all placeholder:text-ink-650 hover:border-white/10 ' +
+  'focus:border-accent/45 focus:ring-3 focus:ring-accent/10';
 
 export function TaskDrawer({
   taskRef,
@@ -38,6 +57,9 @@ export function TaskDrawer({
   const [depDraft, setDepDraft] = useState('');
   const [tagDraft, setTagDraft] = useState('');
   const [answerDraft, setAnswerDraft] = useState('');
+  const [questionDraft, setQuestionDraft] = useState('');
+  const [asking, setAsking] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const load = async () => {
     try {
@@ -52,17 +74,23 @@ export function TaskDrawer({
   };
 
   useEffect(() => {
+    setAsking(false);
+    setConfirmingDelete(false);
+    setQuestionDraft('');
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskRef]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !editingBody) onClose();
+      if (e.key !== 'Escape') return;
+      if (asking) setAsking(false);
+      else if (confirmingDelete) setConfirmingDelete(false);
+      else if (!editingBody) onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, editingBody]);
+  }, [onClose, editingBody, asking, confirmingDelete]);
 
   /** Every mutation funnels through here so a failure surfaces instead of silently no-op'ing. */
   const act = async (fn: () => Promise<unknown>) => {
@@ -76,49 +104,90 @@ export function TaskDrawer({
     }
   };
 
+  const parkWithQuestion = async () => {
+    if (!questionDraft.trim()) return;
+    await act(() => api.ask(taskRef, questionDraft.trim()));
+    setQuestionDraft('');
+    setAsking(false);
+  };
+
+  const deleteTask = async () => {
+    try {
+      await api.remove(taskRef);
+      onChanged();
+      onClose();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  const { panelStyle, handleProps } = useResizablePanel({
+    storageKey: 'orchestration.task-panel-width',
+    defaultWidth: 470,
+    minWidth: 380,
+    maxWidth: 720,
+    mobileCap: 480,
+  });
+
   if (!task) {
     return (
-      <aside className="flex w-[440px] shrink-0 items-center justify-center border-l border-ink-850 bg-ink-900">
-        <p className="text-[13px] text-ink-500">{error ?? 'Loading…'}</p>
-      </aside>
+      <>
+        <button aria-label="Close task" onClick={onClose} className="dialog-backdrop fixed inset-0 z-30 bg-black/50 xl:hidden" />
+        <aside style={panelStyle} className="resizable-right-panel drawer-panel surface-shadow fixed inset-y-0 right-0 z-40 flex shrink-0 items-center justify-center border-l border-white/[.065] bg-ink-925/98 backdrop-blur-xl xl:relative">
+          <PanelResizeHandle {...handleProps} label="Resize task details panel" />
+          <div className="flex items-center gap-2 text-[12px] text-ink-500">
+            {!error && <span className="size-4 animate-spin rounded-full border-2 border-ink-700 border-t-accent" />}
+            {error ?? 'Loading task…'}
+          </div>
+        </aside>
+      </>
     );
   }
 
   const snoozed = task.snooze_until && new Date(task.snooze_until).getTime() > Date.now();
 
   return (
-    <aside className="flex w-[440px] shrink-0 flex-col border-l border-ink-850 bg-ink-900">
-      <header className="flex items-center gap-2 border-b border-ink-850 px-4 py-3">
-        <span className="font-mono text-[11px] text-ink-500">{task.ref}</span>
+    <>
+      <button aria-label="Close task" onClick={onClose} className="dialog-backdrop fixed inset-0 z-30 bg-black/50 xl:hidden" />
+      <aside style={panelStyle} className="resizable-right-panel drawer-panel surface-shadow fixed inset-y-0 right-0 z-40 flex shrink-0 flex-col border-l border-white/[.065] bg-ink-925/98 backdrop-blur-xl xl:relative">
+      <PanelResizeHandle {...handleProps} label="Resize task details panel" />
+      <header className="flex min-h-[72px] items-center gap-2.5 border-b border-white/[.055] px-4">
+        <span className="font-mono text-[10px] tracking-wide text-ink-500">{task.ref}</span>
         <span
-          className="rounded px-1.5 py-0.5 text-[11px]"
-          style={{ background: `${task.project_color}22`, color: task.project_color }}
+          className="rounded-md border px-1.5 py-0.5 text-[9.5px] font-medium"
+          style={{
+            background: `${task.project_color}18`,
+            borderColor: `${task.project_color}30`,
+            color: task.project_color,
+          }}
         >
           {task.project_key}
         </span>
-        <button
-          onClick={onClose}
-          className="ml-auto rounded px-2 py-1 text-ink-500 transition-colors hover:bg-ink-850 hover:text-ink-200"
-          title="Close (Esc)"
-        >
-          ✕
-        </button>
+        <Button variant="ghost" size="icon" onClick={onClose} className="ml-auto" title="Close (Esc)">
+          <X />
+          <span className="sr-only">Close task</span>
+        </Button>
       </header>
 
-      <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4">
+      <div className="flex-1 space-y-6 overflow-y-auto px-4 py-5">
         {error && (
-          <p className="rounded-md border border-p0/30 bg-p0/10 px-2.5 py-2 text-[12px] text-p0">
+          <p className="rounded-lg border border-p0/20 bg-p0/[.08] px-3 py-2 text-[11px] text-p0">
             {error}
           </p>
         )}
 
         {task.question && (
-          <section className="rounded-lg border border-status-input/30 bg-status-input/8 p-3">
-            <p className="text-[10px] font-medium tracking-wider text-status-input uppercase">
-              {task.question_from ?? 'An agent'} is waiting on you
-            </p>
+          <section className="rounded-xl border border-status-input/20 bg-status-input/[.06] p-3.5 shadow-[0_12px_35px_-28px_rgba(240,129,177,.8)]">
+            <div className="flex items-center gap-2 text-status-input">
+              <span className="grid size-7 place-items-center rounded-lg bg-status-input/10">
+                <CircleHelp className="size-3.5" />
+              </span>
+              <p className="text-[9.5px] font-semibold tracking-[0.09em] uppercase">
+                {task.question_from ?? 'An agent'} is waiting on you
+              </p>
+            </div>
             <div
-              className="prose-orchestration mt-1.5 text-[13px] text-ink-100"
+              className="prose-orchestration mt-2.5 text-[12px] text-ink-100"
               dangerouslySetInnerHTML={{ __html: renderMarkdown(task.question) }}
             />
             <textarea
@@ -132,22 +201,20 @@ export function TaskDrawer({
                 void act(() => api.answer(task.ref, answerDraft));
                 setAnswerDraft('');
               }}
-              className="mt-2 w-full resize-none rounded-md border border-ink-800 bg-ink-950
-                         px-2.5 py-1.5 text-[13px] text-ink-50 outline-none transition-colors
-                         placeholder:text-ink-600 focus:border-status-input"
+              className={cn(field, 'mt-2.5 h-auto resize-none py-2.5 leading-relaxed focus:border-status-input/50 focus:ring-status-input/10')}
             />
-            <button
+            <Button
               onClick={() => {
                 if (!answerDraft.trim()) return;
                 void act(() => api.answer(task.ref, answerDraft));
                 setAnswerDraft('');
               }}
               disabled={!answerDraft.trim()}
-              className="mt-2 rounded-md bg-status-input px-3 py-1.5 text-[12px] font-medium
-                         text-ink-950 transition-opacity hover:opacity-90 disabled:opacity-30"
+              size="sm"
+              className="mt-2 bg-status-input text-ink-950 shadow-none hover:bg-status-input/90"
             >
-              Answer and unblock
-            </button>
+              <Send /> Answer and unblock
+            </Button>
           </section>
         )}
 
@@ -163,11 +230,11 @@ export function TaskDrawer({
             }
             if (next !== task.title) void act(() => api.patch(task.ref, { title: next }));
           }}
-          className="w-full resize-none bg-transparent text-[16px] leading-snug font-medium
-                     text-ink-50 outline-none"
+          className="w-full resize-none bg-transparent text-[18px] leading-[1.35] font-semibold
+                     tracking-[-0.015em] text-ink-50 outline-none placeholder:text-ink-650"
         />
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-3 rounded-xl border border-white/[.05] bg-white/[.018] p-3">
           <div>
             <span className={label}>Status</span>
             <select
@@ -186,19 +253,18 @@ export function TaskDrawer({
 
           <div>
             <span className={label}>Priority</span>
-            <div className="mt-1 flex gap-1">
+            <div className="mt-1 flex h-9 gap-1 rounded-lg border border-white/[.065] bg-ink-950/60 p-1">
               {[0, 1, 2, 3].map((p) => (
                 <button
                   key={p}
                   onClick={() => void act(() => api.patch(task.ref, { priority: p }))}
                   style={{
                     color: task.priority === p ? PRIORITY_COLOR[p] : undefined,
-                    borderColor: task.priority === p ? PRIORITY_COLOR[p] : undefined,
                   }}
-                  className={`flex-1 rounded-md border py-1.5 text-[12px] transition-colors ${
+                  className={`flex-1 rounded-md text-[10.5px] font-medium transition-colors ${
                     task.priority === p
-                      ? 'border bg-ink-850'
-                      : 'border-ink-800 text-ink-500 hover:bg-ink-850'
+                      ? 'bg-white/[.075] shadow-sm'
+                      : 'text-ink-600 hover:bg-white/[.035] hover:text-ink-400'
                   }`}
                 >
                   P{p}
@@ -223,7 +289,7 @@ export function TaskDrawer({
           </div>
 
           <div>
-            <span className={label}>Assignee</span>
+            <span className={cn(label, 'flex items-center gap-1.5')}><UserRound className="size-3" />Assignee</span>
             <div className="mt-1 flex gap-1">
               <input
                 defaultValue={task.assignee ?? ''}
@@ -234,14 +300,15 @@ export function TaskDrawer({
                 className={field}
               />
               {task.assignee && (
-                <button
+                <Button
                   onClick={() => void act(() => api.release(task.ref))}
-                  className="shrink-0 rounded-md border border-ink-800 px-2 text-[12px]
-                             text-ink-400 transition-colors hover:bg-ink-850"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
                   title="Release the lease and return it to the queue"
                 >
                   release
-                </button>
+                </Button>
               )}
             </div>
           </div>
@@ -249,7 +316,7 @@ export function TaskDrawer({
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <span className={label}>Due</span>
+            <span className={cn(label, 'flex items-center gap-1.5')}><CalendarClock className="size-3" />Due</span>
             <input
               value={dueDraft}
               placeholder={task.due_at ? relativeTime(task.due_at) : 'friday, 3d, 2026-08-12'}
@@ -263,7 +330,7 @@ export function TaskDrawer({
             />
           </div>
           <div>
-            <span className={label}>Snooze</span>
+            <span className={cn(label, 'flex items-center gap-1.5')}><Clock3 className="size-3" />Snooze</span>
             <input
               value={snoozeDraft}
               placeholder={snoozed ? `until ${relativeTime(task.snooze_until!)}` : '3d, monday'}
@@ -279,7 +346,7 @@ export function TaskDrawer({
         </div>
 
         <div>
-          <span className={label}>Repeats</span>
+          <span className={cn(label, 'flex items-center gap-1.5')}><CalendarClock className="size-3" />Repeats</span>
           <input
             defaultValue={task.recur ?? ''}
             placeholder="cron, e.g. 0 9 * * 1 for Mondays at 9am"
@@ -290,25 +357,25 @@ export function TaskDrawer({
             className={`${field} mt-1 font-mono`}
           />
           {task.recur && (
-            <p className="mt-1 text-[11px] text-ink-500">
+            <p className="mt-1.5 text-[10px] text-ink-600">
               Closing this creates the next occurrence automatically.
             </p>
           )}
         </div>
 
         <div>
-          <span className={label}>Tags</span>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          <span className={cn(label, 'flex items-center gap-1.5')}><Tag className="size-3" />Tags</span>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 rounded-lg border border-white/[.05] bg-white/[.018] p-2">
             {task.tags.map((tag) => (
               <button
                 key={tag}
                 onClick={() => void act(() => api.patch(task.ref, { removeTags: [tag] }))}
-                className="group rounded bg-ink-800 px-2 py-0.5 text-[12px] text-ink-300
-                           transition-colors hover:bg-p0/15 hover:text-p0"
+                className="group rounded-md border border-white/[.055] bg-white/[.04] px-2 py-1 text-[10.5px] text-ink-400
+                           transition-colors hover:border-p0/20 hover:bg-p0/10 hover:text-p0"
                 title="Remove"
               >
-                {tag}
-                <span className="ml-1 opacity-0 transition-opacity group-hover:opacity-100">✕</span>
+                #{tag}
+                <X className="ml-1 inline size-2.5 opacity-0 transition-opacity group-hover:opacity-100" />
               </button>
             ))}
             <input
@@ -320,23 +387,23 @@ export function TaskDrawer({
                 void act(() => api.patch(task.ref, { addTags: [tagDraft.trim()] }));
                 setTagDraft('');
               }}
-              className="w-20 rounded bg-transparent px-1 py-0.5 text-[12px] text-ink-200
-                         outline-none placeholder:text-ink-600"
+              className="min-w-20 flex-1 rounded bg-transparent px-1 py-1 text-[11px] text-ink-200
+                         outline-none placeholder:text-ink-650"
             />
           </div>
         </div>
 
         <div>
-          <span className={label}>Blocked by</span>
-          <div className="mt-1 space-y-1">
+          <span className={cn(label, 'flex items-center gap-1.5')}><Link2 className="size-3" />Blocked by</span>
+          <div className="mt-1.5 space-y-1.5">
             {task.blocked_by.map((ref) => (
               <div key={ref} className="flex items-center gap-2">
-                <span className="rounded bg-p0/12 px-1.5 py-0.5 font-mono text-[12px] text-p0">
+                <span className="rounded-md border border-p0/15 bg-p0/[.08] px-2 py-1 font-mono text-[10.5px] text-p0">
                   {ref}
                 </span>
                 <button
                   onClick={() => void act(() => api.removeDep(task.ref, ref))}
-                  className="text-[11px] text-ink-600 transition-colors hover:text-ink-300"
+                  className="text-[10px] text-ink-650 transition-colors hover:text-ink-300"
                 >
                   remove
                 </button>
@@ -354,24 +421,24 @@ export function TaskDrawer({
               className={field}
             />
             {task.blocks.length > 0 && (
-              <p className="pt-1 text-[11px] text-ink-500">
+              <p className="pt-1 text-[10px] text-ink-600">
                 Blocks {task.blocks.join(', ')}
               </p>
             )}
           </div>
         </div>
 
-        <div>
+        <section className="rounded-xl border border-white/[.05] bg-white/[.018] p-3">
           <div className="flex items-center justify-between">
-            <span className={label}>Description</span>
+            <span className={cn(label, 'flex items-center gap-1.5')}><FileText className="size-3" />Description</span>
             <button
               onClick={() => {
                 if (editingBody) void act(() => api.patch(task.ref, { body: draftBody }));
                 setEditingBody(!editingBody);
               }}
-              className="text-[11px] text-ink-500 transition-colors hover:text-accent"
+              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] text-ink-600 transition-colors hover:bg-white/[.04] hover:text-accent-soft"
             >
-              {editingBody ? 'save' : 'edit'}
+              {editingBody ? <><Save className="size-3" />save</> : <><Pencil className="size-3" />edit</>}
             </button>
           </div>
           {editingBody ? (
@@ -380,63 +447,65 @@ export function TaskDrawer({
               rows={10}
               autoFocus
               onChange={(e) => setDraftBody(e.target.value)}
-              className={`${field} mt-1 resize-y font-mono text-[12px] leading-relaxed`}
+              className={cn(field, 'mt-2 h-auto min-h-48 resize-y py-2.5 font-mono text-[11px] leading-relaxed')}
             />
           ) : task.body.trim() ? (
             <div
-              className="prose-orchestration mt-1 text-[13px] text-ink-200"
+              className="prose-orchestration mt-2 text-[12px] text-ink-300"
               dangerouslySetInnerHTML={{ __html: renderMarkdown(task.body) }}
             />
           ) : (
-            <p className="mt-1 text-[12px] text-ink-600">No description.</p>
+            <p className="mt-2 text-[11px] text-ink-650">No description yet.</p>
           )}
-        </div>
+        </section>
 
-        <div>
-          <span className={label}>Comments</span>
-          <div className="mt-2 space-y-3">
+        <section>
+          <span className={cn(label, 'flex items-center gap-1.5')}><MessageSquare className="size-3" />Comments</span>
+          <div className="mt-2.5 space-y-2">
             {task.comments.map((c) => (
-              <div key={c.id} className="flex gap-2.5">
+              <div key={c.id} className="flex gap-2.5 rounded-lg border border-white/[.045] bg-white/[.018] p-2.5">
                 <span
-                  className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
+                  className={`grid size-6 shrink-0 place-items-center rounded-lg text-[9px] font-semibold ${
                     c.kind === 'question'
-                      ? 'bg-status-input'
+                      ? 'bg-status-input/10 text-status-input'
                       : c.kind === 'answer'
-                        ? 'bg-status-done'
+                        ? 'bg-status-done/10 text-status-done'
                         : c.kind === 'progress'
-                          ? 'bg-accent'
-                          : 'bg-ink-600'
+                          ? 'bg-accent/10 text-accent-soft'
+                          : 'bg-white/[.05] text-ink-500'
                   }`}
-                />
+                >
+                  {c.author.slice(0, 1).toUpperCase()}
+                </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-2">
-                    <span className="text-[12px] font-medium text-ink-100">{c.author}</span>
+                    <span className="text-[11px] font-medium text-ink-100">{c.author}</span>
                     {c.kind === 'progress' && (
-                      <span className="rounded bg-accent/12 px-1.5 text-[10px] tracking-wide text-accent uppercase">
+                      <span className="rounded bg-accent/10 px-1.5 text-[8.5px] tracking-wide text-accent-soft uppercase">
                         agent
                       </span>
                     )}
                     {c.kind === 'question' && (
-                      <span className="rounded bg-status-input/15 px-1.5 text-[10px] tracking-wide text-status-input uppercase">
+                      <span className="rounded bg-status-input/10 px-1.5 text-[8.5px] tracking-wide text-status-input uppercase">
                         asked
                       </span>
                     )}
                     {c.kind === 'answer' && (
-                      <span className="rounded bg-status-done/15 px-1.5 text-[10px] tracking-wide text-status-done uppercase">
+                      <span className="rounded bg-status-done/10 px-1.5 text-[8.5px] tracking-wide text-status-done uppercase">
                         answered
                       </span>
                     )}
-                    <span className="text-[11px] text-ink-600">{relativeTime(c.created_at)}</span>
+                    <span className="ml-auto text-[9px] text-ink-650">{relativeTime(c.created_at)}</span>
                   </div>
                   <div
-                    className="prose-orchestration mt-0.5 text-[13px] break-words text-ink-300"
+                    className="prose-orchestration mt-1 text-[11.5px] break-words text-ink-400"
                     dangerouslySetInnerHTML={{ __html: renderMarkdown(c.body) }}
                   />
                 </div>
               </div>
             ))}
             {task.comments.length === 0 && (
-              <p className="text-[12px] text-ink-600">No comments yet.</p>
+              <p className="rounded-lg border border-dashed border-white/[.05] py-5 text-center text-[10.5px] text-ink-650">No comments yet.</p>
             )}
           </div>
 
@@ -450,48 +519,96 @@ export function TaskDrawer({
               void act(() => api.comment(task.ref, comment));
               setComment('');
             }}
-            className={`${field} mt-3 resize-none`}
+            className={cn(field, 'mt-2.5 h-auto resize-none py-2.5 leading-relaxed')}
           />
-        </div>
+        </section>
 
         {task.events.length > 0 && (
-          <div>
-            <span className={label}>Activity</span>
+          <section>
+            <span className={cn(label, 'flex items-center gap-1.5')}><Clock3 className="size-3" />Activity</span>
             <div className="mt-2 space-y-1.5">
               {task.events.map((event) => (
                 <EventLine key={event.id} event={event} showRef={false} />
               ))}
             </div>
-          </div>
+          </section>
         )}
 
-        <div className="flex items-center gap-3 border-t border-ink-850 pt-3">
-          {!task.question && task.status !== 'done' && task.status !== 'cancelled' && (
-            <button
-              onClick={() => {
-                const question = prompt('What needs deciding before this can continue?');
-                if (question?.trim()) void act(() => api.ask(task.ref, question));
+        {asking && (
+          <section className="rounded-xl border border-status-input/18 bg-status-input/[.055] p-3">
+            <div className="flex items-center gap-2 text-status-input">
+              <CircleHelp className="size-3.5" />
+              <p className="text-[10px] font-semibold">What decision is needed?</p>
+            </div>
+            <textarea
+              value={questionDraft}
+              onChange={(event) => setQuestionDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) void parkWithQuestion();
               }}
-              className="text-[12px] text-ink-600 transition-colors hover:text-status-input"
+              rows={3}
+              autoFocus
+              placeholder="Ask one specific question with the options you see…"
+              className={cn(field, 'mt-2 h-auto resize-none py-2.5 leading-relaxed focus:border-status-input/50 focus:ring-status-input/10')}
+            />
+            <div className="mt-2 flex justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setAsking(false)}>Cancel</Button>
+              <Button
+                size="sm"
+                disabled={!questionDraft.trim()}
+                onClick={() => void parkWithQuestion()}
+                className="bg-status-input text-ink-950 shadow-none hover:bg-status-input/90"
+              >
+                <Send /> Park task
+              </Button>
+            </div>
+          </section>
+        )}
+
+        {confirmingDelete && (
+          <section className="rounded-xl border border-p0/20 bg-p0/[.055] p-3">
+            <div className="flex gap-2.5">
+              <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-p0/10 text-p0"><Trash2 className="size-3.5" /></span>
+              <div>
+                <p className="text-[11px] font-medium text-ink-100">Delete {task.ref}?</p>
+                <p className="mt-0.5 text-[10px] text-ink-600">This permanently removes the task and its history.</p>
+              </div>
+            </div>
+            <div className="mt-3 flex justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setConfirmingDelete(false)}>Cancel</Button>
+              <Button variant="danger" size="sm" onClick={() => void deleteTask()}><Trash2 /> Delete permanently</Button>
+            </div>
+          </section>
+        )}
+
+        <div className="flex items-center gap-2 border-t border-white/[.055] pt-4">
+          {!task.question && task.status !== 'done' && task.status !== 'cancelled' && (
+            <Button
+              onClick={() => {
+                setAsking(true);
+                setConfirmingDelete(false);
+              }}
+              variant="ghost"
+              size="sm"
+              className="text-ink-600 hover:text-status-input"
             >
-              Park with a question
-            </button>
+              <CircleHelp /> Park with a question
+            </Button>
           )}
-          <button
+          <Button
             onClick={() => {
-              if (confirm(`Delete ${task.ref}? This cannot be undone.`)) {
-                void act(async () => {
-                  await api.remove(task.ref);
-                  onClose();
-                });
-              }
+              setConfirmingDelete(true);
+              setAsking(false);
             }}
-            className="ml-auto text-[12px] text-ink-600 transition-colors hover:text-p0"
+            variant="ghost"
+            size="sm"
+            className="ml-auto text-ink-650 hover:bg-p0/10 hover:text-p0"
           >
-            Delete task
-          </button>
+            <Trash2 /> Delete task
+          </Button>
         </div>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

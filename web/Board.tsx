@@ -1,10 +1,21 @@
-import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { DndContext, DragOverlay, PointerSensor, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
-import { useDroppable } from '@dnd-kit/core';
-import { useState } from 'react';
+import { Check, Circle, CircleHelp, Eye, LoaderCircle, Sparkles } from 'lucide-react';
+import { useState, type ComponentType } from 'react';
 
 import { COLUMNS, type Status, type Task } from './api.ts';
+import { cn } from './lib/utils.ts';
 import { TaskCard } from './TaskCard.tsx';
+
+const STATUS_ICON: Record<Status, ComponentType<{ className?: string }>> = {
+  backlog: Circle,
+  ready: Sparkles,
+  in_progress: LoaderCircle,
+  needs_input: CircleHelp,
+  review: Eye,
+  done: Check,
+  cancelled: Circle,
+};
 
 function Column({
   status,
@@ -20,29 +31,44 @@ function Column({
   onOpen: (ref: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
+  const Icon = STATUS_ICON[status];
 
   return (
-    <div className="flex min-w-[268px] flex-1 flex-col">
-      <div className="mb-2 flex items-center gap-2 px-1">
-        <span className="h-2 w-2 rounded-full" style={{ background: color }} />
-        <h2 className="text-[12px] font-medium tracking-wide text-ink-200 uppercase">{label}</h2>
-        <span className="text-[11px] text-ink-500">{tasks.length}</span>
-      </div>
+    <section className="flex min-w-[284px] max-w-[350px] flex-1 flex-col">
+      <header className="mb-2 flex h-8 items-center gap-2 px-1.5">
+        <span
+          className="grid size-5 place-items-center rounded-md border"
+          style={{ color, background: `color-mix(in srgb, ${color} 10%, transparent)`, borderColor: `color-mix(in srgb, ${color} 18%, transparent)` }}
+        >
+          <Icon className={cn('size-3', status === 'in_progress' && 'animate-spin')} />
+        </span>
+        <h2 className="text-[11px] font-semibold tracking-[0.055em] text-ink-300 uppercase">{label}</h2>
+        <span className="rounded-md bg-white/[.045] px-1.5 py-0.5 text-[9.5px] font-medium text-ink-600">{tasks.length}</span>
+      </header>
 
       <div
         ref={setNodeRef}
-        className={`flex flex-1 flex-col gap-2 rounded-xl border border-dashed p-2 transition-colors ${
-          isOver ? 'border-accent/50 bg-accent/5' : 'border-ink-850 bg-ink-900/25'
-        }`}
+        className={cn(
+          'relative flex flex-1 flex-col gap-2 rounded-xl border p-2 transition-all duration-200',
+          isOver
+            ? 'border-accent/35 bg-accent/[.055] shadow-[0_0_0_3px_rgba(124,135,248,.06)_inset]'
+            : 'border-white/[.045] bg-white/[.018]',
+        )}
       >
+        <span className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/[.055] to-transparent" />
         {tasks.map((task) => (
           <TaskCard key={task.ref} task={task} onOpen={onOpen} />
         ))}
         {tasks.length === 0 && (
-          <p className="px-1 py-6 text-center text-[12px] text-ink-600">Nothing here</p>
+          <div className="grid min-h-24 flex-1 place-items-center rounded-lg border border-dashed border-white/[.045]">
+            <div className="text-center">
+              <Circle className="mx-auto size-3.5 text-ink-700" />
+              <p className="mt-1.5 text-[10.5px] text-ink-650">No tasks here</p>
+            </div>
+          </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -61,25 +87,30 @@ export function Board({
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   const start = (event: DragStartEvent) => {
-    setDragging(tasks.find((t) => t.ref === event.active.id) ?? null);
+    setDragging(tasks.find((task) => task.ref === event.active.id) ?? null);
   };
 
   const end = (event: DragEndEvent) => {
     setDragging(null);
     const status = event.over?.id as Status | undefined;
     const ref = String(event.active.id);
-    const task = tasks.find((t) => t.ref === ref);
+    const task = tasks.find((item) => item.ref === ref);
     if (status && task && task.status !== status) onMove(ref, status);
   };
 
   return (
-    <DndContext sensors={sensors} onDragStart={start} onDragEnd={end} onDragCancel={() => setDragging(null)}>
-      <div className="flex h-full gap-3 overflow-x-auto px-4 pb-4">
+    <DndContext
+      sensors={sensors}
+      onDragStart={start}
+      onDragEnd={end}
+      onDragCancel={() => setDragging(null)}
+    >
+      <div className="flex h-full gap-3 overflow-x-auto px-4 pb-4 sm:px-5">
         {COLUMNS.map((column) => (
           <Column
             key={column.status}
             {...column}
-            tasks={tasks.filter((t) => t.status === column.status)}
+            tasks={tasks.filter((task) => task.status === column.status)}
             onOpen={onOpen}
           />
         ))}
@@ -87,7 +118,7 @@ export function Board({
 
       <DragOverlay dropAnimation={null}>
         {dragging && (
-          <div className="rotate-1 opacity-95">
+          <div className="w-[300px] rotate-[1.5deg] opacity-95 shadow-2xl">
             <TaskCard task={dragging} onOpen={() => {}} />
           </div>
         )}

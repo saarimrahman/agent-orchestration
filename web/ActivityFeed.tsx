@@ -1,4 +1,17 @@
+import {
+  Activity,
+  ArrowRight,
+  Bot,
+  CheckCircle2,
+  CircleHelp,
+  MessageCircle,
+  X,
+} from 'lucide-react';
+
 import { relativeTime, type Event } from './api.ts';
+import { PanelResizeHandle, useResizablePanel } from './components/ResizablePanel.tsx';
+import { Button } from './components/ui/button.tsx';
+import { cn } from './lib/utils.ts';
 
 const STATUS_TEXT: Record<string, string> = {
   backlog: 'text-status-backlog',
@@ -14,43 +27,21 @@ function describe(event: Event) {
   const value = event.new_value ?? '';
   switch (event.field) {
     case 'created':
-      return <>created it</>;
+      return <>created this task</>;
     case 'status':
-      return (
-        <>
-          moved to <span className={STATUS_TEXT[value] ?? 'text-ink-200'}>{value}</span>
-        </>
-      );
+      return <><span>moved it to </span><span className={STATUS_TEXT[value] ?? 'text-ink-200'}>{value.replace(/_/g, ' ')}</span></>;
     case 'claimed':
-      return <>claimed it</>;
+      return <>claimed this task</>;
     case 'released':
-      return <>released it</>;
+      return <>released this task</>;
     case 'progress':
-      return (
-        <>
-          reported <span className="text-ink-200">{value}</span>
-        </>
-      );
+      return <>reported <span className="text-ink-200">{value}</span></>;
     case 'comment':
-      return (
-        <>
-          commented <span className="text-ink-200">{value}</span>
-        </>
-      );
+      return <>commented <span className="text-ink-200">{value}</span></>;
     case 'question':
-      return (
-        <>
-          <span className="text-status-input">asked</span>{' '}
-          <span className="text-ink-200">{value}</span>
-        </>
-      );
+      return <><span className="text-status-input">asked</span> <span className="text-ink-200">{value}</span></>;
     case 'answer':
-      return (
-        <>
-          <span className="text-status-done">answered</span>{' '}
-          <span className="text-ink-200">{value}</span>
-        </>
-      );
+      return <><span className="text-status-done">answered</span> <span className="text-ink-200">{value}</span></>;
     case 'recurred_from':
       return <>rolled over from {event.old_value}</>;
     case 'deleted':
@@ -58,16 +49,37 @@ function describe(event: Event) {
     case 'due_at':
       return <>set the due date</>;
     case 'snooze_until':
-      return <>snoozed it</>;
+      return <>snoozed this task</>;
     case 'priority':
-      return (
-        <>
-          set priority to <span className="text-ink-200">P{value}</span>
-        </>
-      );
+      return <>set priority to <span className="text-ink-200">P{value}</span></>;
     default:
       return <>changed {event.field.replace(/_/g, ' ')}</>;
   }
+}
+
+function EventIcon({ event }: { event: Event }) {
+  const Icon = event.field === 'question'
+    ? CircleHelp
+    : event.field === 'answer'
+      ? CheckCircle2
+      : event.field === 'comment'
+        ? MessageCircle
+        : event.field === 'claimed' || event.field === 'progress'
+          ? Bot
+          : ArrowRight;
+  const color = event.field === 'question'
+    ? 'border-status-input/20 bg-status-input/10 text-status-input'
+    : event.field === 'answer'
+      ? 'border-status-done/20 bg-status-done/10 text-status-done'
+      : event.field === 'claimed' || event.field === 'progress'
+        ? 'border-accent/20 bg-accent/10 text-accent-soft'
+        : 'border-white/[.055] bg-white/[.035] text-ink-600';
+
+  return (
+    <span className={cn('mt-0.5 grid size-6 shrink-0 place-items-center rounded-lg border', color)}>
+      <Icon className="size-3" />
+    </span>
+  );
 }
 
 export function EventLine({
@@ -79,31 +91,26 @@ export function EventLine({
   showRef?: boolean;
   onOpen?: (ref: string) => void;
 }) {
-  const isAgentUpdate = event.field === 'progress' || event.field === 'claimed';
-  const wantsYou = event.field === 'question';
-
   return (
-    <div className="flex items-baseline gap-2 text-[12px] leading-relaxed">
-      <span
-        className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${
-          wantsYou ? 'bg-status-input' : isAgentUpdate ? 'bg-accent' : 'bg-ink-700'
-        }`}
-      />
-      <span className="min-w-0 flex-1 text-ink-500">
-        <span className="font-medium text-ink-100">{event.actor}</span>{' '}
-        {showRef && event.task_ref && (
-          <>
-            <button
-              onClick={() => onOpen?.(event.task_ref!)}
-              className="font-mono text-ink-400 transition-colors hover:text-accent"
-            >
-              {event.task_ref}
-            </button>{' '}
-          </>
-        )}
-        {describe(event)}
-      </span>
-      <span className="shrink-0 text-[11px] text-ink-600">{relativeTime(event.at)}</span>
+    <div className="flex gap-2.5 py-1 text-[11px] leading-relaxed">
+      <EventIcon event={event} />
+      <div className="min-w-0 flex-1">
+        <p className="text-ink-500">
+          <span className="font-medium text-ink-200">{event.actor}</span>{' '}
+          {showRef && event.task_ref && (
+            <>
+              <button
+                onClick={() => onOpen?.(event.task_ref!)}
+                className="font-mono text-[10px] text-ink-400 outline-none transition-colors hover:text-accent-soft focus-visible:text-accent-soft"
+              >
+                {event.task_ref}
+              </button>{' '}
+            </>
+          )}
+          {describe(event)}
+        </p>
+        <p className="mt-0.5 text-[9.5px] text-ink-700">{relativeTime(event.at)}</p>
+      </div>
     </div>
   );
 }
@@ -111,24 +118,59 @@ export function EventLine({
 export function ActivityFeed({
   events,
   onOpen,
+  onClose,
 }: {
   events: Event[];
   onOpen: (ref: string) => void;
+  onClose: () => void;
 }) {
+  const { panelStyle, handleProps } = useResizablePanel({
+    storageKey: 'orchestration.activity-panel-width',
+    defaultWidth: 340,
+    minWidth: 280,
+    maxWidth: 560,
+    mobileCap: 360,
+  });
+
   return (
-    <aside className="flex w-[320px] shrink-0 flex-col border-l border-ink-850 bg-ink-900">
-      <header className="border-b border-ink-850 px-4 py-3">
-        <h2 className="text-[12px] font-medium tracking-wide text-ink-200 uppercase">Activity</h2>
-        <p className="mt-0.5 text-[11px] text-ink-600">
-          Everything agents and you have done, newest first
-        </p>
-      </header>
-      <div className="flex-1 space-y-2.5 overflow-y-auto px-4 py-3">
-        {events.map((event) => (
-          <EventLine key={event.id} event={event} onOpen={onOpen} />
-        ))}
-        {events.length === 0 && <p className="text-[12px] text-ink-600">Nothing yet.</p>}
-      </div>
-    </aside>
+    <>
+      <button
+        aria-label="Close activity"
+        onClick={onClose}
+        className="dialog-backdrop fixed inset-0 z-20 bg-black/45 xl:hidden"
+      />
+      <aside
+        style={panelStyle}
+        className="resizable-right-panel drawer-panel surface-shadow fixed inset-y-0 right-0 z-30 flex shrink-0 flex-col border-l border-white/[.055] bg-ink-925/97 backdrop-blur-xl xl:relative"
+      >
+        <PanelResizeHandle {...handleProps} label="Resize activity panel" />
+        <header className="flex min-h-[72px] items-center gap-3 border-b border-white/[.055] px-4">
+          <span className="grid size-8 place-items-center rounded-xl border border-accent/15 bg-accent/[.08] text-accent-soft">
+            <Activity className="size-4" />
+          </span>
+          <div>
+            <h2 className="text-[12.5px] font-semibold text-ink-100">Activity</h2>
+            <p className="mt-0.5 text-[10px] text-ink-600">Live updates across your workspace</p>
+          </div>
+          <Button variant="ghost" size="icon" onClick={onClose} className="ml-auto">
+            <X />
+            <span className="sr-only">Close activity</span>
+          </Button>
+        </header>
+        <div className="flex-1 space-y-1 overflow-y-auto px-4 py-3">
+          {events.map((event) => (
+            <EventLine key={event.id} event={event} onOpen={onOpen} />
+          ))}
+          {events.length === 0 && (
+            <div className="grid h-40 place-items-center text-center">
+              <div>
+                <Activity className="mx-auto size-4 text-ink-700" />
+                <p className="mt-2 text-[11px] text-ink-600">Nothing has happened yet.</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </aside>
+    </>
   );
 }

@@ -1,10 +1,24 @@
+import {
+  AlignLeft,
+  CalendarDays,
+  Folder,
+  Link2,
+  ListPlus,
+  Repeat2,
+  Tags,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { PRIORITY_COLOR, api, type Project } from './api.ts';
+import { Button } from './components/ui/button.tsx';
+import { cn } from './lib/utils.ts';
 
 const field =
-  'w-full rounded-md border border-ink-800 bg-ink-950 px-3 py-2 text-[13px] text-ink-50 ' +
-  'outline-none transition-colors placeholder:text-ink-600 focus:border-accent-dim';
+  'h-9 w-full rounded-lg border border-white/[.065] bg-ink-950/70 px-3 text-[12px] text-ink-50 ' +
+  'shadow-sm outline-none transition-all placeholder:text-ink-650 hover:border-white/10 ' +
+  'focus:border-accent/45 focus:ring-3 focus:ring-accent/10';
 
 export function NewTask({
   projects,
@@ -31,7 +45,7 @@ export function NewTask({
 
   useEffect(() => {
     titleRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
@@ -47,8 +61,8 @@ export function NewTask({
         priority,
         due: due.trim() || null,
         recur: recur.trim() || null,
-        tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
-        deps: deps.split(',').map((d) => d.trim()).filter(Boolean),
+        tags: tags.split(',').map((item) => item.trim()).filter(Boolean),
+        deps: deps.split(',').map((item) => item.trim()).filter(Boolean),
         actor: 'you',
       });
       await onCreated(task.ref);
@@ -60,111 +74,120 @@ export function NewTask({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 pt-[12vh]"
+      className="dialog-backdrop fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/65 px-3 py-[8vh]"
       onClick={onClose}
     >
       <div
-        className="w-[560px] rounded-xl border border-ink-800 bg-ink-900 p-5 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void submit();
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-task-title"
+        className="dialog-panel surface-shadow w-full max-w-[620px] overflow-hidden rounded-2xl border border-white/[.08] bg-ink-900"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) void submit();
         }}
       >
-        <input
-          ref={titleRef}
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="What needs doing?"
-          className="w-full bg-transparent text-[17px] font-medium text-ink-50 outline-none
-                     placeholder:text-ink-600"
-        />
+        <header className="flex items-center gap-3 border-b border-white/[.055] px-5 py-4">
+          <span className="grid size-9 place-items-center rounded-xl border border-accent/15 bg-accent/10 text-accent-soft">
+            <ListPlus className="size-4" />
+          </span>
+          <div>
+            <h2 id="new-task-title" className="text-[14px] font-semibold text-ink-50">Create a task</h2>
+            <p className="mt-0.5 text-[10.5px] text-ink-600">Capture enough context for anyone to pick it up.</p>
+          </div>
+          <Button variant="ghost" size="icon" onClick={onClose} className="ml-auto">
+            <X />
+            <span className="sr-only">Close</span>
+          </Button>
+        </header>
 
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={4}
-          placeholder="Description — Markdown, acceptance criteria, links…"
-          className={`${field} mt-3 resize-y`}
-        />
-
-        <div className="mt-3 grid grid-cols-2 gap-3">
-          <select value={project} onChange={(e) => setProject(e.target.value)} className={field}>
-            {projects.map((p) => (
-              <option key={p.key} value={p.key}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-
-          <div className="flex gap-1">
-            {[0, 1, 2, 3].map((p) => (
-              <button
-                key={p}
-                onClick={() => setPriority(p)}
-                style={{
-                  color: priority === p ? PRIORITY_COLOR[p] : undefined,
-                  borderColor: priority === p ? PRIORITY_COLOR[p] : undefined,
-                }}
-                className={`flex-1 rounded-md border py-2 text-[12px] transition-colors ${
-                  priority === p ? 'bg-ink-850' : 'border-ink-800 text-ink-500 hover:bg-ink-850'
-                }`}
-              >
-                P{p}
-              </button>
-            ))}
+        <div className="space-y-4 p-5">
+          <div>
+            <label htmlFor="task-title" className="text-[10px] font-semibold tracking-[0.08em] text-ink-500 uppercase">Title</label>
+            <input
+              id="task-title"
+              ref={titleRef}
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="What needs doing?"
+              className="mt-1.5 w-full bg-transparent text-[17px] leading-snug font-medium tracking-[-0.01em] text-ink-50 outline-none placeholder:text-ink-650"
+            />
           </div>
 
-          <input
-            value={due}
-            onChange={(e) => setDue(e.target.value)}
-            placeholder="Due — friday, 3d, 2026-08-12"
-            className={field}
-          />
-          <input
-            value={recur}
-            onChange={(e) => setRecur(e.target.value)}
-            placeholder="Repeat — 0 9 * * 1"
-            className={`${field} font-mono`}
-          />
-          <input
-            value={tags}
-            onChange={(e) => setTags(e.target.value)}
-            placeholder="Tags — api, infra"
-            className={field}
-          />
-          <input
-            value={deps}
-            onChange={(e) => setDeps(e.target.value)}
-            placeholder="Blocked by — demo-3"
-            className={field}
-          />
+          <FieldLabel icon={AlignLeft} label="Description">
+            <textarea
+              value={body}
+              onChange={(event) => setBody(event.target.value)}
+              rows={5}
+              placeholder="Add context, acceptance criteria, or links… Markdown is supported."
+              className={cn(field, 'h-auto resize-y py-2.5 leading-relaxed')}
+            />
+          </FieldLabel>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <FieldLabel icon={Folder} label="Project">
+              <select value={project} onChange={(event) => setProject(event.target.value)} className={field}>
+                {projects.map((item) => <option key={item.key} value={item.key}>{item.name}</option>)}
+              </select>
+            </FieldLabel>
+
+            <div>
+              <p className="mb-1.5 text-[10px] font-semibold tracking-[0.08em] text-ink-500 uppercase">Priority</p>
+              <div className="flex h-9 gap-1 rounded-lg border border-white/[.065] bg-ink-950/70 p-1">
+                {[0, 1, 2, 3].map((value) => (
+                  <button
+                    key={value}
+                    onClick={() => setPriority(value)}
+                    style={{ color: priority === value ? PRIORITY_COLOR[value] : undefined }}
+                    className={cn(
+                      'flex-1 rounded-md text-[10.5px] font-medium transition-all',
+                      priority === value
+                        ? 'bg-white/[.075] shadow-sm'
+                        : 'text-ink-600 hover:bg-white/[.035] hover:text-ink-400',
+                    )}
+                  >
+                    P{value}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <FieldLabel icon={CalendarDays} label="Due date">
+              <input value={due} onChange={(event) => setDue(event.target.value)} placeholder="friday, 3d, 2026-08-12" className={field} />
+            </FieldLabel>
+            <FieldLabel icon={Repeat2} label="Repeat">
+              <input value={recur} onChange={(event) => setRecur(event.target.value)} placeholder="0 9 * * 1" className={cn(field, 'font-mono')} />
+            </FieldLabel>
+            <FieldLabel icon={Tags} label="Tags">
+              <input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="api, infra" className={field} />
+            </FieldLabel>
+            <FieldLabel icon={Link2} label="Blocked by">
+              <input value={deps} onChange={(event) => setDeps(event.target.value)} placeholder="general-3, demo-7" className={field} />
+            </FieldLabel>
+          </div>
+
+          {error && <p className="rounded-lg border border-p0/20 bg-p0/[.08] px-3 py-2 text-[11px] text-p0">{error}</p>}
         </div>
 
-        {error && (
-          <p className="mt-3 rounded-md border border-p0/30 bg-p0/10 px-2.5 py-2 text-[12px] text-p0">
-            {error}
-          </p>
-        )}
-
-        <div className="mt-4 flex items-center gap-2">
-          <span className="text-[11px] text-ink-600">⌘↵ to create · Esc to cancel</span>
-          <button
-            onClick={onClose}
-            className="ml-auto rounded-md px-3 py-1.5 text-[12px] text-ink-400
-                       transition-colors hover:bg-ink-850"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => void submit()}
-            disabled={!title.trim() || busy}
-            className="rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-ink-950
-                       transition-opacity hover:opacity-90 disabled:opacity-35"
-          >
-            {busy ? 'Creating…' : 'Create'}
-          </button>
-        </div>
+        <footer className="flex items-center gap-2 border-t border-white/[.055] bg-black/10 px-5 py-3.5">
+          <span className="hidden text-[10px] text-ink-650 sm:inline">⌘↵ to create · Esc to cancel</span>
+          <Button variant="ghost" size="sm" onClick={onClose} className="ml-auto">Cancel</Button>
+          <Button size="sm" onClick={() => void submit()} disabled={!title.trim() || busy}>
+            <ListPlus /> {busy ? 'Creating…' : 'Create task'}
+          </Button>
+        </footer>
       </div>
     </div>
+  );
+}
+
+function FieldLabel({ icon: Icon, label, children }: { icon: LucideIcon; label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold tracking-[0.08em] text-ink-500 uppercase">
+        <Icon className="size-3" /> {label}
+      </span>
+      {children}
+    </label>
   );
 }

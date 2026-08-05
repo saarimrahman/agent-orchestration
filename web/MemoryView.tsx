@@ -1,7 +1,32 @@
+import {
+  BookOpen,
+  Brain,
+  CheckCircle2,
+  FileText,
+  Lightbulb,
+  Pencil,
+  Save,
+  ShieldAlert,
+  Sparkles,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 import { api, type MemoryDocument } from './api.ts';
+import { Badge } from './components/ui/badge.tsx';
+import { Button } from './components/ui/button.tsx';
+import { cn } from './lib/utils.ts';
 import { renderMarkdown } from './markdown.ts';
+
+const KIND_ICON: Record<MemoryDocument['kind'], LucideIcon> = {
+  fact: CheckCircle2,
+  decision: Lightbulb,
+  pitfall: ShieldAlert,
+  playbook: BookOpen,
+  preference: Sparkles,
+  note: FileText,
+};
 
 export function MemoryView({ query, project }: { query: string; project: string | null }) {
   const [memories, setMemories] = useState<MemoryDocument[] | null>(null);
@@ -42,63 +67,72 @@ export function MemoryView({ query, project }: { query: string; project: string 
   }, [memories, project, query]);
 
   if (error) {
-    return <p className="px-4 py-8 text-[13px] text-p0">Could not load memory: {error}</p>;
+    return <p className="mx-5 rounded-lg border border-p0/20 bg-p0/[.08] px-3 py-2 text-[11px] text-p0">Could not load memory: {error}</p>;
   }
   if (!memories) {
-    return <p className="px-4 py-8 text-[13px] text-ink-500">Loading memory…</p>;
+    return (
+      <div className="flex items-center gap-2 px-5 py-8 text-[11px] text-ink-600">
+        <span className="size-4 animate-spin rounded-full border-2 border-ink-700 border-t-accent" /> Loading memory…
+      </div>
+    );
   }
 
   return (
-    <div className="h-full overflow-y-auto px-4 pb-6">
-      <div className="mb-3 flex items-baseline gap-2">
-        <h1 className="text-[14px] font-semibold text-ink-50">Durable memory</h1>
-        <span className="text-[12px] text-ink-600">
-          {shown.length} of {memories.length}
+    <div className="h-full overflow-y-auto px-4 pb-6 sm:px-5">
+      <div className="mb-4 flex items-center gap-3">
+        <span className="grid size-9 place-items-center rounded-xl border border-accent/15 bg-accent/[.08] text-accent-soft">
+          <Brain className="size-4" />
         </span>
+        <div>
+          <h1 className="text-[14px] font-semibold tracking-[-0.01em] text-ink-50">Durable memory</h1>
+          <p className="mt-0.5 text-[10.5px] text-ink-600">Verified knowledge that follows work across tasks</p>
+        </div>
+        <Badge variant="secondary" className="ml-auto">{shown.length} of {memories.length}</Badge>
       </div>
 
       {shown.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-ink-800 px-5 py-12 text-center">
-          <p className="text-[13px] text-ink-300">No memories here yet.</p>
-          <p className="mt-1 text-[12px] text-ink-600">
-            Agents can save one with <code>orchestration remember &quot;…&quot;</code>.
-          </p>
+        <div className="grid min-h-56 place-items-center rounded-2xl border border-dashed border-white/[.065] bg-white/[.015] px-5 text-center">
+          <div>
+            <Brain className="mx-auto size-5 text-ink-700" />
+            <p className="mt-3 text-[12px] text-ink-300">No memories found</p>
+            <p className="mt-1 text-[10.5px] text-ink-600">Agents can save one with <code className="text-ink-400">orchestration remember &quot;…&quot;</code>.</p>
+          </div>
         </div>
       ) : (
         <div className="grid items-start gap-3 xl:grid-cols-2">
-          {shown.map((memory) => (
-            <article key={memory.id} className="rounded-xl border border-ink-800 bg-ink-900 p-4">
-              <div className="flex items-start gap-2">
-                <div className="flex flex-wrap items-center gap-1.5 text-[10px] uppercase tracking-wide">
-                  <span className="rounded bg-accent/12 px-1.5 py-0.5 text-accent">{memory.kind}</span>
-                  <span className="rounded bg-ink-850 px-1.5 py-0.5 text-ink-400">
-                    {memory.project_key ?? 'global'}
+          {shown.map((memory) => {
+            const KindIcon = KIND_ICON[memory.kind];
+            return (
+              <article key={memory.id} className="group rounded-2xl border border-white/[.06] bg-ink-900/75 p-4 shadow-[0_12px_30px_rgba(0,0,0,.1)] transition-all hover:-translate-y-px hover:border-white/[.105] hover:bg-ink-875">
+                <div className="flex items-start gap-3">
+                  <span className="grid size-8 shrink-0 place-items-center rounded-xl border border-accent/12 bg-accent/[.07] text-accent-soft">
+                    <KindIcon className="size-3.5" />
                   </span>
-                  <span className="rounded bg-ink-850 px-1.5 py-0.5 text-ink-500">
-                    {memory.status}
-                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge>{memory.kind}</Badge>
+                      <Badge variant="secondary">{memory.project_key ?? 'global'}</Badge>
+                      <Badge variant={memory.status === 'active' ? 'success' : 'outline'}>{memory.status}</Badge>
+                    </div>
+                    <h2 className="mt-2 text-[13px] font-semibold tracking-[-0.005em] text-ink-50">{memory.title}</h2>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={() => setEditing(memory)} className="-mt-1 opacity-70 group-hover:opacity-100">
+                    <Pencil /> Edit
+                  </Button>
                 </div>
-                <button
-                  onClick={() => setEditing(memory)}
-                  className="ml-auto rounded px-2 py-1 text-[11px] text-ink-500 transition-colors
-                             hover:bg-ink-850 hover:text-ink-200"
-                >
-                  Edit
-                </button>
-              </div>
-              <h2 className="mt-2 text-[14px] font-medium text-ink-50">{memory.title}</h2>
-              <div
-                className="prose-orchestration mt-2 text-[12.5px] text-ink-300"
-                dangerouslySetInnerHTML={{ __html: renderMarkdown(memory.body) }}
-              />
-              {(memory.tags.length > 0 || memory.sources.length > 0) && (
-                <div className="mt-3 flex flex-wrap gap-1 border-t border-ink-850 pt-3 text-[10px] text-ink-500">
-                  {memory.tags.map((tag) => <span key={tag}>#{tag}</span>)}
-                  {memory.sources.map((source) => <span key={source}>source:{source}</span>)}
-                </div>
-              )}
-            </article>
-          ))}
+                <div
+                  className="prose-orchestration mt-3 text-[11.5px] text-ink-400"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(memory.body) }}
+                />
+                {(memory.tags.length > 0 || memory.sources.length > 0) && (
+                  <div className="mt-3 flex flex-wrap gap-x-2 gap-y-1 border-t border-white/[.045] pt-3 text-[9.5px] text-ink-650">
+                    {memory.tags.map((tag) => <span key={tag}>#{tag}</span>)}
+                    {memory.sources.map((source) => <span key={source}>source:{source}</span>)}
+                  </div>
+                )}
+              </article>
+            );
+          })}
         </div>
       )}
 
@@ -117,8 +151,9 @@ export function MemoryView({ query, project }: { query: string; project: string 
 }
 
 const field =
-  'w-full rounded-md border border-ink-800 bg-ink-950 px-3 py-2 text-[13px] text-ink-50 ' +
-  'outline-none transition-colors placeholder:text-ink-600 focus:border-accent-dim';
+  'h-9 w-full rounded-lg border border-white/[.065] bg-ink-950/70 px-3 text-[12px] text-ink-50 ' +
+  'shadow-sm outline-none transition-all placeholder:text-ink-650 hover:border-white/10 ' +
+  'focus:border-accent/45 focus:ring-3 focus:ring-accent/10';
 
 const KINDS = ['fact', 'decision', 'pitfall', 'playbook', 'preference', 'note'] as const;
 const STATUSES = ['candidate', 'active', 'superseded', 'archived'] as const;
@@ -141,6 +176,12 @@ function MemoryEditor({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   const save = async () => {
     if (!title.trim() || !body.trim() || busy) return;
     setBusy(true);
@@ -161,48 +202,53 @@ function MemoryEditor({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-[8vh]" onClick={onClose}>
+    <div className="dialog-backdrop fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/65 px-3 py-[7vh]" onClick={onClose}>
       <div
-        className="w-[680px] rounded-xl border border-ink-800 bg-ink-900 p-5 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-memory-title"
+        className="dialog-panel surface-shadow w-full max-w-[700px] overflow-hidden rounded-2xl border border-white/[.08] bg-ink-900"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="mb-4">
-          <p className="text-[14px] font-semibold text-ink-50">Edit memory</p>
-          <p className="mt-0.5 font-mono text-[10px] text-ink-600">{memory.id}</p>
+        <header className="flex items-center gap-3 border-b border-white/[.055] px-5 py-4">
+          <span className="grid size-9 place-items-center rounded-xl border border-accent/15 bg-accent/10 text-accent-soft"><Brain className="size-4" /></span>
+          <div>
+            <h2 id="edit-memory-title" className="text-[14px] font-semibold text-ink-50">Edit memory</h2>
+            <p className="mt-0.5 font-mono text-[9px] text-ink-650">{memory.id}</p>
+          </div>
+          <Button variant="ghost" size="icon" onClick={onClose} className="ml-auto"><X /><span className="sr-only">Close</span></Button>
+        </header>
+
+        <div className="space-y-3 p-5">
+          <input value={title} onChange={(event) => setTitle(event.target.value)} className={field} aria-label="Memory title" />
+          <textarea
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+            rows={12}
+            className={cn(field, 'h-auto resize-y py-2.5 font-mono text-[11px] leading-relaxed')}
+            aria-label="Memory body"
+          />
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <select value={kind} onChange={(event) => setKind(event.target.value as typeof kind)} className={field} aria-label="Memory kind">
+              {KINDS.map((value) => <option key={value}>{value}</option>)}
+            </select>
+            <select value={status} onChange={(event) => setStatus(event.target.value as typeof status)} className={field} aria-label="Memory status">
+              {STATUSES.map((value) => <option key={value}>{value}</option>)}
+            </select>
+            <input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Tags, comma separated" className={field} />
+            <input value={sources} onChange={(event) => setSources(event.target.value)} placeholder="Sources, comma separated" className={field} />
+          </div>
+
+          {error && <p className="rounded-lg border border-p0/20 bg-p0/[.08] px-3 py-2 text-[11px] text-p0">{error}</p>}
         </div>
 
-        <input value={title} onChange={(event) => setTitle(event.target.value)} className={field} />
-        <textarea
-          value={body}
-          onChange={(event) => setBody(event.target.value)}
-          rows={12}
-          className={`${field} mt-3 resize-y font-mono leading-relaxed`}
-        />
-
-        <div className="mt-3 grid grid-cols-2 gap-3">
-          <select value={kind} onChange={(event) => setKind(event.target.value as typeof kind)} className={field}>
-            {KINDS.map((value) => <option key={value}>{value}</option>)}
-          </select>
-          <select value={status} onChange={(event) => setStatus(event.target.value as typeof status)} className={field}>
-            {STATUSES.map((value) => <option key={value}>{value}</option>)}
-          </select>
-          <input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="Tags, comma separated" className={field} />
-          <input value={sources} onChange={(event) => setSources(event.target.value)} placeholder="Sources, comma separated" className={field} />
-        </div>
-
-        {error && <p className="mt-3 text-[12px] text-p0">{error}</p>}
-        <div className="mt-4 flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-md px-3 py-1.5 text-[12px] text-ink-400 hover:bg-ink-850">
-            Cancel
-          </button>
-          <button
-            onClick={() => void save()}
-            disabled={!title.trim() || !body.trim() || busy}
-            className="rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-ink-950 disabled:opacity-35"
-          >
-            {busy ? 'Saving…' : 'Save memory'}
-          </button>
-        </div>
+        <footer className="flex justify-end gap-2 border-t border-white/[.055] bg-black/10 px-5 py-3.5">
+          <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+          <Button size="sm" onClick={() => void save()} disabled={!title.trim() || !body.trim() || busy}>
+            <Save /> {busy ? 'Saving…' : 'Save memory'}
+          </Button>
+        </footer>
       </div>
     </div>
   );

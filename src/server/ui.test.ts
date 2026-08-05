@@ -374,6 +374,47 @@ describe('web bundle', () => {
     );
     assert.match(text, /waiting on your answer/, 'the banner should call out pending questions');
 
+    const activityResize = dom.window.document.querySelector(
+      '[role="separator"][aria-label="Resize activity panel"]',
+    );
+    assert.ok(activityResize, 'the activity panel should expose an accessible resize handle');
+    const activityWidth = Number(activityResize.getAttribute('aria-valuenow'));
+    activityResize.dispatchEvent(new dom.window.KeyboardEvent('keydown', {
+      key: 'ArrowLeft',
+      bubbles: true,
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(
+      Number(activityResize.getAttribute('aria-valuenow')),
+      activityWidth + 20,
+      'the activity panel should resize from the keyboard',
+    );
+
+    const parserCard = [...dom.window.document.querySelectorAll('article')]
+      .find((article) => article.textContent?.includes('Write the parser'));
+    assert.ok(parserCard, 'the seeded task should be clickable');
+    parserCard.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const taskResize = dom.window.document.querySelector(
+      '[role="separator"][aria-label="Resize task details panel"]',
+    );
+    assert.ok(taskResize, 'the task drawer should expose an accessible resize handle');
+    const taskWidth = Number(taskResize.getAttribute('aria-valuenow'));
+    taskResize.dispatchEvent(new dom.window.KeyboardEvent('keydown', {
+      key: 'ArrowLeft',
+      bubbles: true,
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(
+      Number(taskResize.getAttribute('aria-valuenow')),
+      taskWidth + 20,
+      'the task drawer should resize from the keyboard',
+    );
+    const closeTask = dom.window.document.querySelector('button[aria-label="Close task"]');
+    assert.ok(closeTask);
+    closeTask.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
     const memoryButton = [...dom.window.document.querySelectorAll('button')]
       .find((button) => button.textContent?.trim() === 'Memory');
     assert.ok(memoryButton, 'memory should be reachable from the board sidebar');

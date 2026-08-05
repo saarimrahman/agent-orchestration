@@ -1,36 +1,42 @@
 @import 'tailwindcss';
 
-/*
- * One neutral ramp plus one accent, defined as tokens so the whole board stays
- * consistent. Status and priority hues are the only other colours in play, and
- * each is used for exactly one meaning.
- */
 @theme {
-  --color-ink-50: #f5f6f8;
-  --color-ink-200: #c8ccd4;
-  --color-ink-400: #8a919e;
-  --color-ink-500: #6b7280;
-  --color-ink-600: #4b5563;
-  --color-ink-700: #2f3440;
-  --color-ink-800: #21252e;
-  --color-ink-850: #1a1d25;
-  --color-ink-900: #14161c;
-  --color-ink-950: #0e1014;
+  --color-ink-50: #f8f9fb;
+  --color-ink-100: #edf0f5;
+  --color-ink-200: #d3d8e2;
+  --color-ink-300: #abb3c2;
+  --color-ink-400: #858e9f;
+  --color-ink-500: #687184;
+  --color-ink-600: #50586a;
+  --color-ink-650: #434a59;
+  --color-ink-700: #353b49;
+  --color-ink-800: #252a35;
+  --color-ink-850: #1d212b;
+  --color-ink-875: #191d26;
+  --color-ink-900: #151820;
+  --color-ink-925: #11141a;
+  --color-ink-950: #0b0d12;
 
-  --color-accent: #7c8cff;
-  --color-accent-dim: #5865c8;
+  --color-accent: #7c87f8;
+  --color-accent-bright: #8d97ff;
+  --color-accent-soft: #aab2ff;
+  --color-accent-dim: #5963c8;
 
-  --color-p0: #f26d6d;
-  --color-p1: #e0a458;
-  --color-p2: #6b93d6;
-  --color-p3: #6b7280;
+  --color-p0: #ff747d;
+  --color-p1: #eab568;
+  --color-p2: #75a7ed;
+  --color-p3: #778093;
 
-  --color-status-backlog: #6b7280;
-  --color-status-ready: #4cc2c4;
-  --color-status-progress: #e0a458;
-  --color-status-input: #e879a8;
-  --color-status-review: #b47ce0;
-  --color-status-done: #5fb87a;
+  --color-status-backlog: #7f899d;
+  --color-status-ready: #54c9c1;
+  --color-status-progress: #eab568;
+  --color-status-input: #f081b1;
+  --color-status-review: #ba8bf0;
+  --color-status-done: #68c88b;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 html,
@@ -39,35 +45,135 @@ body,
   height: 100%;
 }
 
+:root {
+  color-scheme: dark;
+}
+
 body {
   margin: 0;
-  background: var(--color-ink-950);
+  min-width: 320px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 42% -20%, rgb(124 135 248 / 10%), transparent 38rem),
+    var(--color-ink-950);
   color: var(--color-ink-200);
   font-family:
-    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 14px;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+::selection {
+  background: rgb(124 135 248 / 32%);
+  color: var(--color-ink-50);
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-ink-800);
-  border-radius: 6px;
-  border: 2px solid var(--color-ink-950);
+  background: rgb(80 88 106 / 42%);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-ink-700);
+  background: rgb(104 113 132 / 65%);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.app-grid {
+  background-image:
+    linear-gradient(rgb(255 255 255 / 1.6%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 1.6%) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, black, transparent 70%);
+}
+
+.surface-shadow {
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 3%) inset,
+    0 18px 45px rgb(0 0 0 / 18%);
+}
+
+.resizable-right-panel {
+  width: min(94vw, var(--panel-mobile-cap));
+}
+
+@media (min-width: 1280px) {
+  .resizable-right-panel {
+    width: var(--panel-width);
+  }
+}
+
+.dialog-backdrop {
+  animation: fade-in 140ms ease-out;
+  backdrop-filter: blur(5px);
+}
+
+.dialog-panel {
+  animation: dialog-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.drawer-panel {
+  animation: drawer-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
+@keyframes drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Markdown rendered inside the task drawer. */
 .prose-orchestration {
-  line-height: 1.65;
+  line-height: 1.68;
+  overflow-wrap: anywhere;
 }
 .prose-orchestration p {
   margin: 0 0 0.75em;
@@ -84,19 +190,20 @@ body {
   list-style: decimal;
 }
 .prose-orchestration code {
-  background: var(--color-ink-850);
-  border: 1px solid var(--color-ink-800);
-  border-radius: 4px;
-  padding: 0.1em 0.35em;
+  background: rgb(255 255 255 / 4.5%);
+  border: 1px solid rgb(255 255 255 / 6%);
+  border-radius: 5px;
+  padding: 0.12em 0.38em;
   font-size: 0.9em;
 }
 .prose-orchestration pre {
-  background: var(--color-ink-900);
-  border: 1px solid var(--color-ink-800);
-  border-radius: 8px;
-  padding: 0.75em 1em;
+  background: var(--color-ink-925);
+  border: 1px solid rgb(255 255 255 / 6%);
+  border-radius: 10px;
+  padding: 0.9em 1em;
   overflow-x: auto;
   margin: 0 0 0.75em;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 16%);
 }
 .prose-orchestration pre code {
   background: none;
@@ -120,12 +227,16 @@ body {
   font-size: 1em;
 }
 .prose-orchestration a {
-  color: var(--color-accent);
-  text-decoration: underline;
+  color: var(--color-accent-soft);
+  text-decoration: underline rgb(170 178 255 / 35%);
+  text-underline-offset: 3px;
 }
 .prose-orchestration blockquote {
-  border-left: 2px solid var(--color-ink-700);
+  border-left: 2px solid var(--color-accent-dim);
   padding-left: 0.9em;
   color: var(--color-ink-400);
   margin: 0 0 0.75em;
+}
+.prose-orchestration > :last-child {
+  margin-bottom: 0;
 }
