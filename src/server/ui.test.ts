@@ -52,6 +52,15 @@ before(async () => {
   rememberMemory(db, uiMemoryRoot, {
     title: 'Browser memory',
     body: 'Visible and editable from the board.',
+    tags: ['browser', 'ui'],
+    project: null,
+  });
+  rememberMemory(db, uiMemoryRoot, {
+    title: 'Alpha memory',
+    body: 'A second memory for browsing controls.',
+    kind: 'fact',
+    status: 'candidate',
+    tags: ['docs'],
     project: null,
   });
   const app = createApp(db, { memoryRoot: uiMemoryRoot });
@@ -434,8 +443,30 @@ describe('web bundle', () => {
     assert.match(memoryText, /Durable memory/);
     assert.match(memoryText, /Browser memory/);
     assert.doesNotMatch(memoryText, /Visible and editable from the board/);
-    const memoryRow = dom.window.document.querySelector('button[aria-label="View memory: Browser memory"]');
+    assert.ok(dom.window.document.querySelector('select[aria-label="Filter memories by kind"]'));
+    assert.ok(dom.window.document.querySelector('select[aria-label="Filter memories by status"]'));
+    assert.ok(dom.window.document.querySelector('select[aria-label="Filter memories by scope"]'));
+
+    const rows = () => [...dom.window.document.querySelectorAll('button[aria-label^="View memory:"]')];
+    let memoryRow = dom.window.document.querySelector('button[aria-label="View memory: Browser memory"]');
     assert.ok(memoryRow, 'each compact memory title should open its detail');
+    assert.match(memoryRow.textContent ?? '', /#browser/);
+    assert.match(memoryRow.textContent ?? '', /#ui/);
+
+    const sortSelect = dom.window.document.querySelector('select[aria-label="Sort memories"]') as HTMLSelectElement;
+    sortSelect.value = 'title-asc';
+    sortSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(rows()[0]?.getAttribute('aria-label'), 'View memory: Alpha memory');
+
+    const tagSelect = dom.window.document.querySelector('select[aria-label="Filter memories by tag"]') as HTMLSelectElement;
+    tagSelect.value = 'ui';
+    tagSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(rows().map((row) => row.getAttribute('aria-label')), ['View memory: Browser memory']);
+
+    memoryRow = dom.window.document.querySelector('button[aria-label="View memory: Browser memory"]');
+    assert.ok(memoryRow);
     memoryRow.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /Visible and editable from the board/);

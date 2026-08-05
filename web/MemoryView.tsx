@@ -1,11 +1,14 @@
 import {
+  ArrowUpDown,
   BookOpen,
   Brain,
   CheckCircle2,
   ChevronRight,
   FileText,
   Lightbulb,
+  ListFilter,
   Pencil,
+  RotateCcw,
   Save,
   ShieldAlert,
   Sparkles,
@@ -30,12 +33,29 @@ const KIND_ICON: Record<MemoryDocument['kind'], LucideIcon> = {
   note: FileText,
 };
 
+const KINDS = ['fact', 'decision', 'pitfall', 'playbook', 'preference', 'note'] as const;
+const STATUSES = ['candidate', 'active', 'superseded', 'archived'] as const;
+type MemorySort = 'updated-desc' | 'updated-asc' | 'title-asc' | 'title-desc' | 'kind' | 'status' | 'project' | 'tag';
+
+const filterField =
+  'h-8 rounded-lg border border-white/[.065] bg-ink-950/65 px-2.5 text-[11px] text-ink-200 ' +
+  'outline-none transition-colors hover:border-white/10 focus:border-accent/45 focus:ring-2 focus:ring-accent/10';
+
+function displayLabel(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1).replaceAll('-', ' ');
+}
+
 export function MemoryView({ query, project }: { query: string; project: string | null }) {
   const [memories, setMemories] = useState<MemoryDocument[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<MemoryDocument | null>(null);
   const [editing, setEditing] = useState<MemoryDocument | null>(null);
   const [deleting, setDeleting] = useState<MemoryDocument | null>(null);
+  const [tagFilter, setTagFilter] = useState('all');
+  const [kindFilter, setKindFilter] = useState<MemoryDocument['kind'] | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<MemoryDocument['status'] | 'all'>('all');
+  const [scopeFilter, setScopeFilter] = useState<MemoryDocument['scope'] | 'all'>('all');
+  const [sort, setSort] = useState<MemorySort>('updated-desc');
 
   useEffect(() => {
     let alive = true;
@@ -52,23 +72,65 @@ export function MemoryView({ query, project }: { query: string; project: string 
     };
   }, []);
 
+  const scopedMemories = useMemo(
+    () => memories?.filter((memory) => !project || memory.project_key === project) ?? [],
+    [memories, project],
+  );
+
+  const availableTags = useMemo(
+    () => [...new Set(scopedMemories.flatMap((memory) => memory.tags))]
+      .sort((a, b) => a.localeCompare(b)),
+    [scopedMemories],
+  );
+
+  useEffect(() => {
+    if (tagFilter !== 'all' && !availableTags.includes(tagFilter)) setTagFilter('all');
+  }, [availableTags, tagFilter]);
+
   const shown = useMemo(() => {
     if (!memories) return [];
     const needle = query.trim().toLowerCase();
-    return memories.filter((memory) => {
+    const filtered = memories.filter((memory) => {
       if (project && memory.project_key !== project) return false;
-      if (!needle) return true;
-      return [
-        memory.title,
-        memory.body,
-        memory.kind,
-        memory.status,
-        memory.project_key ?? 'global',
-        ...memory.tags,
-        ...memory.sources,
-      ].some((value) => value.toLowerCase().includes(needle));
+      if (tagFilter !== 'all' && !memory.tags.includes(tagFilter)) return false;
+      if (kindFilter !== 'all' && memory.kind !== kindFilter) return false;
+      if (statusFilter !== 'all' && memory.status !== statusFilter) return false;
+      if (scopeFilter !== 'all' && memory.scope !== scopeFilter) return false;
+      if (needle && ![
+          memory.title,
+          memory.body,
+          memory.kind,
+          memory.status,
+          memory.project_key ?? 'global',
+          ...memory.tags,
+          ...memory.sources,
+        ].some((value) => value.toLowerCase().includes(needle))) return false;
+      return true;
     });
-  }, [memories, project, query]);
+
+    const byTitle = (a: MemoryDocument, b: MemoryDocument) =>
+      a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
+    return filtered.sort((a, b) => {
+      switch (sort) {
+        case 'updated-asc': return a.updated_at.localeCompare(b.updated_at) || byTitle(a, b);
+        case 'title-asc': return byTitle(a, b);
+        case 'title-desc': return byTitle(b, a);
+        case 'kind': return KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind) || byTitle(a, b);
+        case 'status': return STATUSES.indexOf(a.status) - STATUSES.indexOf(b.status) || byTitle(a, b);
+        case 'project': return (a.project_key ?? '').localeCompare(b.project_key ?? '') || byTitle(a, b);
+        case 'tag': return (a.tags[0] ?? '').localeCompare(b.tags[0] ?? '') || byTitle(a, b);
+        default: return b.updated_at.localeCompare(a.updated_at) || byTitle(a, b);
+      }
+    });
+  }, [kindFilter, memories, project, query, scopeFilter, sort, statusFilter, tagFilter]);
+
+  const hasFilters = tagFilter !== 'all' || kindFilter !== 'all' || statusFilter !== 'all' || scopeFilter !== 'all';
+  const clearFilters = () => {
+    setTagFilter('all');
+    setKindFilter('all');
+    setStatusFilter('all');
+    setScopeFilter('all');
+  };
 
   const askToDelete = (memory: MemoryDocument) => {
     setSelected(null);
@@ -97,15 +159,85 @@ export function MemoryView({ query, project }: { query: string; project: string 
           <h1 className="text-[14px] font-semibold tracking-[-0.01em] text-ink-50">Durable memory</h1>
           <p className="mt-0.5 text-[10.5px] text-ink-600">Verified knowledge that follows work across tasks</p>
         </div>
-        <Badge variant="secondary" className="ml-auto">{shown.length} of {memories.length}</Badge>
+        <Badge variant="secondary" className="ml-auto">{shown.length} of {scopedMemories.length}</Badge>
+      </div>
+
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-white/[.055] bg-white/[.018] p-2">
+        <span className="flex items-center gap-1.5 px-1 text-[10.5px] font-medium text-ink-500">
+          <ListFilter className="size-3.5" /> Filter
+        </span>
+        <select
+          value={tagFilter}
+          onChange={(event) => setTagFilter(event.target.value)}
+          aria-label="Filter memories by tag"
+          className={filterField}
+        >
+          <option value="all">All tags</option>
+          {availableTags.map((tag) => <option key={tag} value={tag}>#{tag}</option>)}
+        </select>
+        <select
+          value={kindFilter}
+          onChange={(event) => setKindFilter(event.target.value as typeof kindFilter)}
+          aria-label="Filter memories by kind"
+          className={filterField}
+        >
+          <option value="all">All kinds</option>
+          {KINDS.map((kind) => <option key={kind} value={kind}>{displayLabel(kind)}</option>)}
+        </select>
+        <select
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
+          aria-label="Filter memories by status"
+          className={filterField}
+        >
+          <option value="all">All statuses</option>
+          {STATUSES.map((status) => <option key={status} value={status}>{displayLabel(status)}</option>)}
+        </select>
+        <select
+          value={scopeFilter}
+          onChange={(event) => setScopeFilter(event.target.value as typeof scopeFilter)}
+          aria-label="Filter memories by scope"
+          className={filterField}
+        >
+          <option value="all">All scopes</option>
+          <option value="global">Global</option>
+          <option value="project">Project</option>
+        </select>
+        {hasFilters && (
+          <Button variant="ghost" size="sm" onClick={clearFilters} className="h-8 px-2 text-[11px]">
+            <RotateCcw /> Clear
+          </Button>
+        )}
+        <span className="ml-auto flex items-center gap-1.5 px-1 text-[10.5px] font-medium text-ink-500">
+          <ArrowUpDown className="size-3.5" /> Sort
+        </span>
+        <select
+          value={sort}
+          onChange={(event) => setSort(event.target.value as MemorySort)}
+          aria-label="Sort memories"
+          className={filterField}
+        >
+          <option value="updated-desc">Recently updated</option>
+          <option value="updated-asc">Least recently updated</option>
+          <option value="title-asc">Title A–Z</option>
+          <option value="title-desc">Title Z–A</option>
+          <option value="kind">Kind</option>
+          <option value="status">Status</option>
+          <option value="project">Project</option>
+          <option value="tag">Tag</option>
+        </select>
       </div>
 
       {shown.length === 0 ? (
         <div className="grid min-h-56 place-items-center rounded-2xl border border-dashed border-white/[.065] bg-white/[.015] px-5 text-center">
           <div>
             <Brain className="mx-auto size-5 text-ink-700" />
-            <p className="mt-3 text-[12px] text-ink-300">No memories found</p>
-            <p className="mt-1 text-[10.5px] text-ink-600">Agents can save one with <code className="text-ink-400">orchestration remember &quot;…&quot;</code>.</p>
+            <p className="mt-3 text-[12px] text-ink-300">{hasFilters || query.trim() ? 'No matching memories' : 'No memories found'}</p>
+            <p className="mt-1 text-[10.5px] text-ink-600">
+              {hasFilters || query.trim()
+                ? 'Adjust the search or clear the memory filters.'
+                : <>Agents can save one with <code className="text-ink-400">orchestration remember &quot;…&quot;</code>.</>}
+            </p>
           </div>
         </div>
       ) : (
@@ -118,15 +250,22 @@ export function MemoryView({ query, project }: { query: string; project: string 
                 type="button"
                 aria-label={`View memory: ${memory.title}`}
                 onClick={() => setSelected(memory)}
-                className="group flex min-w-0 items-center gap-3 rounded-xl border border-white/[.06] bg-ink-900/75 px-3.5 py-3 text-left shadow-[0_10px_25px_rgba(0,0,0,.08)] outline-none transition-all hover:-translate-y-px hover:border-white/[.105] hover:bg-ink-875 focus-visible:ring-2 focus-visible:ring-accent/55"
+                className="group flex min-w-0 items-start gap-3 rounded-xl border border-white/[.06] bg-ink-900/75 px-3.5 py-3 text-left shadow-[0_10px_25px_rgba(0,0,0,.08)] outline-none transition-all hover:-translate-y-px hover:border-white/[.105] hover:bg-ink-875 focus-visible:ring-2 focus-visible:ring-accent/55"
               >
                 <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-accent/12 bg-accent/[.07] text-accent-soft">
                   <KindIcon className="size-3.5" />
                 </span>
-                <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold tracking-[-0.005em] text-ink-50">
-                  {memory.title}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[12.5px] font-semibold tracking-[-0.005em] text-ink-50">{memory.title}</span>
+                  {memory.tags.length > 0 && (
+                    <span className="mt-1.5 flex flex-wrap gap-1">
+                      {memory.tags.map((tag) => (
+                        <span key={tag} className="rounded-md border border-white/[.055] bg-white/[.04] px-1.5 py-0.5 text-[9.5px] leading-none text-ink-500">#{tag}</span>
+                      ))}
+                    </span>
+                  )}
                 </span>
-                <ChevronRight className="size-4 shrink-0 text-ink-700 transition-transform group-hover:translate-x-0.5 group-hover:text-ink-400" />
+                <ChevronRight className="mt-2 size-4 shrink-0 text-ink-700 transition-transform group-hover:translate-x-0.5 group-hover:text-ink-400" />
               </button>
             );
           })}
@@ -241,9 +380,6 @@ const field =
   'h-9 w-full rounded-lg border border-white/[.065] bg-ink-950/70 px-3 text-[12px] text-ink-50 ' +
   'shadow-sm outline-none transition-all placeholder:text-ink-650 hover:border-white/10 ' +
   'focus:border-accent/45 focus:ring-3 focus:ring-accent/10';
-
-const KINDS = ['fact', 'decision', 'pitfall', 'playbook', 'preference', 'note'] as const;
-const STATUSES = ['candidate', 'active', 'superseded', 'archived'] as const;
 
 function MemoryEditor({
   memory,
