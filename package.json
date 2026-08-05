@@ -1,0 +1,47 @@
+{
+  "name": "orch",
+  "version": "0.1.0",
+  "description": "A local to-do system that agents can read, claim, and report progress to.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "orch": "./bin/orch"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "files": [
+    "bin",
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "orch": "node ./bin/orch",
+    "dev:web": "vite",
+    "build": "vite build",
+    "test": "node --disable-warning=ExperimentalWarning --test",
+    "typecheck": "tsc --noEmit",
+    "start": "node ./bin/orch ui"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.0",
+    "chrono-node": "^2.7.7",
+    "cron-parser": "^5.7.0",
+    "hono": "^4.6.14"
+  },
+  "devDependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^29.1.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}

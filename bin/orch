@@ -1,0 +1,16 @@
+#!/usr/bin/env node
+
+// node:sqlite emits an ExperimentalWarning the moment it is imported, so the
+// filter has to be installed before that import runs. A static import would be
+// hoisted above this, hence the dynamic one below.
+process.removeAllListeners('warning');
+process.on('warning', (warning) => {
+  if (!/SQLite is an experimental feature/.test(warning.message)) console.warn(warning);
+});
+
+import('../src/cli/index.ts')
+  .then(({ run }) => run())
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
