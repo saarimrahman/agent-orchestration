@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { agentsBlock, skillFile } from './core/instructions.ts';
 
 /**
  * Guards against the ways this project can be broken from the outside rather
@@ -52,6 +53,16 @@ describe('packaging', () => {
     assert.equal(proxyPort, serverDefault, 'the dev proxy must point at the API default port');
   });
 
+  test('the dev proxy does not swallow the frontend api.ts module', () => {
+    const config = readFileSync(join(ROOT, 'vite.config.ts'), 'utf8');
+    assert.match(config, /['"]\^\/api\/['"]\s*:/, 'only /api/ routes should be proxied');
+    assert.doesNotMatch(
+      config,
+      /['"]\/api['"]\s*:/,
+      'a broad /api prefix also matches /api.ts and produces a blank page',
+    );
+  });
+
   test('the dev server defaults to IPv4 loopback so 127.0.0.1 resolves', () => {
     const config = readFileSync(join(ROOT, 'vite.config.ts'), 'utf8');
     // Vite's own default binds ::1 only, which makes http://127.0.0.1 refuse
@@ -65,5 +76,13 @@ describe('packaging', () => {
     // Otherwise reaching a dev box by its own hostname returns Vite's
     // "Blocked request" page, which reads as a broken app.
     assert.match(config, /allowedHosts: exposed \? true : undefined/);
+  });
+
+  test('checked-in agent instructions match the generated workflow', () => {
+    const agents = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8');
+    const skill = readFileSync(join(ROOT, '.claude', 'skills', 'orch', 'SKILL.md'), 'utf8');
+
+    assert.ok(agents.includes(agentsBlock().trim()), 'AGENTS.md must match the workflow source');
+    assert.equal(skill, skillFile(), 'the installed skill must match the workflow source');
   });
 });

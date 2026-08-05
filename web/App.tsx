@@ -10,6 +10,7 @@ import {
 } from './api.ts';
 import { ActivityFeed } from './ActivityFeed.tsx';
 import { Board } from './Board.tsx';
+import { MemoryView } from './MemoryView.tsx';
 import { NewTask } from './NewTask.tsx';
 import { TaskDrawer } from './TaskDrawer.tsx';
 
@@ -21,7 +22,8 @@ type ViewId =
   | 'ready'
   | 'mine'
   | 'snoozed'
-  | 'done';
+  | 'done'
+  | 'memory';
 
 const VIEWS: { id: ViewId; label: string }[] = [
   { id: 'board', label: 'All open' },
@@ -32,6 +34,7 @@ const VIEWS: { id: ViewId; label: string }[] = [
   { id: 'mine', label: 'In progress' },
   { id: 'snoozed', label: 'Snoozed' },
   { id: 'done', label: 'Recently done' },
+  { id: 'memory', label: 'Memory' },
 ];
 
 function endOfToday(): number {
@@ -206,32 +209,36 @@ export function App() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search tasks…"
+            placeholder={view === 'memory' ? 'Search memory…' : 'Search tasks…'}
             className="w-64 rounded-md border border-ink-850 bg-ink-900 px-2.5 py-1.5 text-[13px]
                        text-ink-50 outline-none transition-colors placeholder:text-ink-600
                        focus:border-accent-dim"
           />
-          <span className="text-[12px] text-ink-600">
-            {tasks.length} task{tasks.length === 1 ? '' : 's'}
-            {project && ` in ${project}`}
-            {tag && ` tagged ${tag}`}
-          </span>
+          {view !== 'memory' && (
+            <span className="text-[12px] text-ink-600">
+              {tasks.length} task{tasks.length === 1 ? '' : 's'}
+              {project && ` in ${project}`}
+              {tag && ` tagged ${tag}`}
+            </span>
+          )}
           {actionError && (
             <span className="rounded bg-p0/12 px-2 py-1 text-[12px] text-p0">{actionError}</span>
           )}
-          <button
-            onClick={() => setShowFeed(!showFeed)}
-            className={`ml-auto rounded-md border px-2.5 py-1.5 text-[12px] transition-colors ${
-              showFeed
-                ? 'border-ink-700 bg-ink-850 text-ink-200'
-                : 'border-ink-850 text-ink-500 hover:bg-ink-850'
-            }`}
-          >
-            Activity
-          </button>
+          {view !== 'memory' && (
+            <button
+              onClick={() => setShowFeed(!showFeed)}
+              className={`ml-auto rounded-md border px-2.5 py-1.5 text-[12px] transition-colors ${
+                showFeed
+                  ? 'border-ink-700 bg-ink-850 text-ink-200'
+                  : 'border-ink-850 text-ink-500 hover:bg-ink-850'
+              }`}
+            >
+              Activity
+            </button>
+          )}
         </header>
 
-        {counts.needsInput > 0 && view !== 'needs_input' && (
+        {counts.needsInput > 0 && view !== 'needs_input' && view !== 'memory' && (
           <button
             onClick={() => setView('needs_input')}
             className="mx-4 mb-2 flex items-center gap-2 rounded-lg border border-status-input/30
@@ -247,7 +254,7 @@ export function App() {
           </button>
         )}
 
-        {state.tasks.length === 0 && state.recently_closed.length === 0 && (
+        {view !== 'memory' && state.tasks.length === 0 && state.recently_closed.length === 0 && (
           <div className="mx-4 mb-3 flex items-center gap-4 rounded-xl border border-accent/25
                           bg-accent/8 px-4 py-3">
             <div>
@@ -267,7 +274,11 @@ export function App() {
         )}
 
         <div className="min-h-0 flex-1">
-          <Board tasks={tasks} onOpen={setSelected} onMove={move} />
+          {view === 'memory' ? (
+            <MemoryView query={query} project={project} />
+          ) : (
+            <Board tasks={tasks} onOpen={setSelected} onMove={move} />
+          )}
         </div>
       </main>
 
@@ -280,7 +291,9 @@ export function App() {
         />
       )}
 
-      {showFeed && !selected && <ActivityFeed events={state.events} onOpen={setSelected} />}
+      {showFeed && !selected && view !== 'memory' && (
+        <ActivityFeed events={state.events} onOpen={setSelected} />
+      )}
 
       {composing && (
         <NewTask

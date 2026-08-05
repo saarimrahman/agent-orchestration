@@ -1,4 +1,10 @@
-import type { Comment, EventView, TaskView } from '../core/index.ts';
+import type {
+  Comment,
+  EventView,
+  MemoryContext,
+  MemoryDocument,
+  TaskView,
+} from '../core/index.ts';
 import { relative } from '../core/index.ts';
 
 const enabled =
@@ -77,6 +83,7 @@ export function taskDetail(
   task: TaskView,
   comments: Comment[],
   events: EventView[],
+  memory?: MemoryContext,
 ): string {
   const out: string[] = [];
   out.push(`${c.bold(task.ref)}  ${task.title}`);
@@ -119,6 +126,10 @@ export function taskDetail(
 
   if (task.body.trim()) out.push('', task.body.trim());
 
+  if (memory && (memory.pinned.length || memory.matches.length)) {
+    out.push('', memoryContextText(memory));
+  }
+
   if (comments.length) {
     out.push('', c.bold('Comments'));
     const badges: Record<string, string> = {
@@ -142,6 +153,51 @@ export function taskDetail(
     }
   }
 
+  return out.join('\n');
+}
+
+export function memoryContextText(memory: MemoryContext): string {
+  const out = [c.bold('Relevant memory')];
+  for (const pinned of memory.pinned) {
+    out.push(`  ${c.magenta(`[${pinned.scope} guidance]`)} ${c.dim(pinned.path)}`);
+    for (const line of pinned.body.split('\n')) out.push(`    ${line}`);
+  }
+  for (const match of memory.matches) {
+    out.push(
+      `  ${c.cyan(`[${match.kind}]`)} ${c.bold(match.title)} ${c.dim(match.id.slice(0, 12))}`,
+    );
+    if (match.snippet) out.push(`    ${match.snippet.replace(/\s+/g, ' ').trim()}`);
+    const source = match.sources.length ? ` · source ${match.sources.join(', ')}` : '';
+    out.push(c.dim(`    ${match.path}${source}`));
+  }
+  return out.join('\n');
+}
+
+export function memoryTable(memories: MemoryDocument[]): string {
+  if (!memories.length) return c.dim('No memories.');
+  return memories.map((memory) => {
+    const scope = memory.scope === 'global' ? 'global' : (memory.project_key ?? 'project');
+    const tags = memory.tags.length ? c.dim(memory.tags.map((tag) => `#${tag}`).join(' ')) : '';
+    return [
+      c.bold(memory.id.slice(0, 12).padEnd(12)),
+      c.cyan(memory.kind.padEnd(10)),
+      (memory.status === 'active' ? c.green : c.yellow)(memory.status.padEnd(10)),
+      c.dim(scope.padEnd(12)),
+      memory.title,
+      tags,
+    ].filter(Boolean).join('  ');
+  }).join('\n');
+}
+
+export function memoryDetail(memory: MemoryDocument): string {
+  const out = [
+    `${c.bold(memory.id)}  ${memory.title}`,
+    `${c.cyan(memory.kind)}  ${memory.status === 'active' ? c.green(memory.status) : c.yellow(memory.status)}  ${c.dim(memory.scope === 'global' ? 'global' : (memory.project_key ?? 'project'))}`,
+    c.dim(memory.path),
+  ];
+  if (memory.tags.length) out.push(c.dim(memory.tags.map((tag) => `#${tag}`).join(' ')));
+  if (memory.sources.length) out.push(c.dim(`sources: ${memory.sources.join(', ')}`));
+  out.push('', memory.body);
   return out.join('\n');
 }
 

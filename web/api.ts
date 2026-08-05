@@ -80,6 +80,25 @@ export type State = {
 
 export type TaskDetail = Task & { comments: Comment[]; events: Event[] };
 
+export type MemoryDocument = {
+  id: string;
+  project_key: string | null;
+  scope: 'global' | 'project';
+  kind: 'fact' | 'decision' | 'pitfall' | 'playbook' | 'preference' | 'note';
+  status: 'candidate' | 'active' | 'superseded' | 'archived';
+  title: string;
+  path: string;
+  tags: string[];
+  sources: string[];
+  author: string | null;
+  body: string;
+  created_at: string;
+  updated_at: string;
+  last_verified_at: string | null;
+  review_after: string | null;
+  supersedes: string | null;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
@@ -96,6 +115,7 @@ const body = (value: unknown) => JSON.stringify(value);
 
 export const api = {
   state: () => request<State>('/state'),
+  memories: () => request<MemoryDocument[]>('/memories'),
   task: (ref: string) => request<TaskDetail>(`/tasks/${ref}`),
   create: (input: Record<string, unknown>) =>
     request<Task>('/tasks', { method: 'POST', body: body(input) }),

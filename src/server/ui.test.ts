@@ -1,5 +1,7 @@
 import { test, before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
 import { build } from 'esbuild';
@@ -11,6 +13,7 @@ import {
   createProject,
   createTask,
   openDb,
+  rememberMemory,
 } from '../core/index.ts';
 import { createApp } from './index.ts';
 
@@ -27,6 +30,7 @@ import { createApp } from './index.ts';
 const ROOT = join(import.meta.dirname, '..', '..');
 
 let server: { close: () => void; port: number } | null = null;
+let uiMemoryRoot = '';
 
 function seed() {
   const db = openDb(':memory:');
@@ -43,7 +47,8 @@ function seed() {
 
 before(async () => {
   const { serve } = await import('@hono/node-server');
-  const app = createApp(seed());
+  uiMemoryRoot = mkdtempSync(join(tmpdir(), 'orch-ui-memory-'));
+  const app = createApp(seed(), { memoryRoot: uiMemoryRoot });
   await new Promise<void>((resolve) => {
     const instance = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' }, (info) => {
       server = { close: () => instance.close(), port: info.port };
@@ -52,7 +57,10 @@ before(async () => {
   });
 });
 
-after(() => server?.close());
+after(() => {
+  server?.close();
+  rmSync(uiMemoryRoot, { recursive: true, force: true });
+});
 
 describe('api', () => {
   const call = async (path: string, init?: RequestInit) => {
@@ -69,6 +77,34 @@ describe('api', () => {
     assert.ok(Array.isArray(body.tasks) && body.tasks.length > 0);
     assert.ok(Array.isArray(body.events));
     assert.equal(typeof body.marker, 'number');
+  });
+
+  test('memory view returns global and every project scope, including archived entries', async () => {
+    const db = openDb(':memory:');
+    const project = createProject(db, 'docs', 'Docs');
+    const root = mkdtempSync(join(tmpdir(), 'orch-memory-api-'));
+    try {
+      rememberMemory(db, root, { title: 'Shared rule', body: 'Use small commits.', project: null });
+      rememberMemory(db, root, {
+        title: 'Old project note',
+        body: 'Retained for history.',
+        status: 'archived',
+        project,
+      });
+
+      const res = await createApp(db, { memoryRoot: root }).request('http://x/api/memories');
+      assert.equal(res.status, 200);
+      const memories = (await res.json()) as { title: string; project_key: string | null; status: string }[];
+      assert.deepEqual(
+        memories.map((memory) => [memory.title, memory.project_key, memory.status]).sort(),
+        [
+          ['Old project note', 'docs', 'archived'],
+          ['Shared rule', null, 'active'],
+        ],
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test('create, comment, and read back a task', async () => {
@@ -304,6 +340,15 @@ describe('web bundle', () => {
       'the question should be readable on the board without opening the task',
     );
     assert.match(text, /waiting on your answer/, 'the banner should call out pending questions');
+
+    const memoryButton = [...dom.window.document.querySelectorAll('button')]
+      .find((button) => button.textContent?.trim() === 'Memory');
+    assert.ok(memoryButton, 'memory should be reachable from the board sidebar');
+    memoryButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const memoryText = dom.window.document.getElementById('root')?.textContent ?? '';
+    assert.match(memoryText, /Durable memory/);
+    assert.match(memoryText, /No memories here yet/);
 
     dom.window.close();
   });

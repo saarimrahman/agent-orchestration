@@ -18,6 +18,7 @@ import {
   claimTask,
   createProject,
   createTask,
+  defaultProject,
   deleteTask,
   detachTag,
   digest,
@@ -25,30 +26,58 @@ import {
   isValidCron,
   listComments,
   listEvents,
+  listMemories,
   listProjects,
   listTags,
   listTasks,
   mergeAgentsFile,
+  memoryContextForTask,
+  memoryDiff,
+  memoryHistory,
+  memoryStatus,
   openDb,
   parseDuration,
   parseWhenOrThrow,
   readyTasks,
   recentEvents,
+  reindexMemories,
   releaseTask,
   removeDep,
   requireTask,
+  requireProject,
   resolveDbPath,
+  resolveMemoryPath,
+  rememberMemory,
+  searchMemories,
+  getMemory,
+  updateMemory,
+  archiveMemory,
+  commitMemory,
   setStatus,
   skillFile,
   updateTask,
   STATUSES,
+  MEMORY_KINDS,
+  MEMORY_STATUSES,
   type Db,
+  type MemoryKind,
+  type MemoryStatus,
+  type Project,
   type Status,
   type TaskView,
 } from '../core/index.ts';
 
 import { bool, list, num, parseArgs, present, str, type Parsed } from './args.ts';
-import { c, describeEvent, json, taskDetail, taskTable } from './format.ts';
+import {
+  c,
+  describeEvent,
+  json,
+  memoryContextText,
+  memoryDetail,
+  memoryTable,
+  taskDetail,
+  taskTable,
+} from './format.ts';
 
 const HELP = `orch — a local to-do queue that agents can read, claim, and report to.
 
@@ -81,6 +110,14 @@ Structure
   tag add|rm <ref> <tag>
   tags                      Tags in use
   project add|ls|archive|unarchive [key]
+
+Memory (stored outside the repo in ~/.orch/memory)
+  remember "<learning>"     Save a durable project memory
+  memory ls|search|show     Find and inspect memories
+  memory edit|promote|archive <id>
+  memory diff|history|status|commit
+  memory reindex            Rebuild the SQLite index from Markdown
+  context <task-ref>        Show bounded memory relevant to a task
 
 Other
   init [--project <key>]    Create the database and write agent instructions
@@ -270,8 +307,9 @@ function cmdNext(db: Db, p: Parsed): number {
     return 1;
   }
 
-  if (bool(p, 'json')) console.log(json(task));
-  else console.log(taskDetail(task, listComments(db, task.id), []));
+  const memory = memoryContextForTask(db, resolveMemoryPath(), task);
+  if (bool(p, 'json')) console.log(json({ ...task, memory }));
+  else console.log(taskDetail(task, listComments(db, task.id), [], memory));
   return 0;
 }
 
@@ -302,7 +340,8 @@ function cmdShow(db: Db, p: Parsed): void {
   const task = requireTask(db, requirePositional(p, 0, 'orch show <ref>'));
   const comments = listComments(db, task.id);
   const events = listEvents(db, task.id);
-  out(p, { ...task, comments, events }, () => taskDetail(task, comments, events));
+  const memory = memoryContextForTask(db, resolveMemoryPath(), task);
+  out(p, { ...task, comments, events, memory }, () => taskDetail(task, comments, events, memory));
 }
 
 function cmdComment(db: Db, p: Parsed): void {
@@ -498,6 +537,172 @@ function cmdProject(db: Db, p: Parsed): void {
   }
 }
 
+function selectedMemoryProject(db: Db, p: Parsed): Project | null {
+  if (bool(p, 'global')) return null;
+  const key = str(p, 'project');
+  return key ? requireProject(db, key) : defaultProject(db);
+}
+
+function parsedMemoryKind(p: Parsed): MemoryKind | undefined {
+  const raw = str(p, 'kind');
+  if (!raw) return undefined;
+  if (!MEMORY_KINDS.includes(raw as MemoryKind)) {
+    throw new CliError(`Unknown memory kind "${raw}". Valid: ${MEMORY_KINDS.join(', ')}.`);
+  }
+  return raw as MemoryKind;
+}
+
+function parsedMemoryStatus(p: Parsed): MemoryStatus | undefined {
+  const raw = bool(p, 'candidate') ? 'candidate' : str(p, 'status');
+  if (!raw) return undefined;
+  if (!MEMORY_STATUSES.includes(raw as MemoryStatus)) {
+    throw new CliError(`Unknown memory status "${raw}". Valid: ${MEMORY_STATUSES.join(', ')}.`);
+  }
+  return raw as MemoryStatus;
+}
+
+function cmdRemember(db: Db, p: Parsed, positionalStart = 0): void {
+  const body = str(p, 'body') ?? str(p, 'message') ?? p.positional.slice(positionalStart).join(' ');
+  if (!body.trim()) {
+    throw new CliError('What should be remembered?  orch remember "The UI tests need a build first"');
+  }
+  const project = selectedMemoryProject(db, p);
+  const review = str(p, 'review-after');
+  const memory = rememberMemory(db, resolveMemoryPath(), {
+    body,
+    title: str(p, 'title'),
+    kind: parsedMemoryKind(p),
+    status: parsedMemoryStatus(p),
+    tags: list(p, 'tag'),
+    sources: list(p, 'source'),
+    author: actor(p),
+    lastVerifiedAt: bool(p, 'verified') ? new Date().toISOString() : null,
+    reviewAfter: review ? parseWhenOrThrow(review).toISOString() : null,
+    supersedes: str(p, 'supersedes'),
+    project,
+  });
+  out(p, memory, () => `${c.dim('remembered')} ${c.bold(memory.id.slice(0, 12))}  ${memory.title}\n${c.dim(memory.path)}`);
+}
+
+function cmdMemory(db: Db, p: Parsed): void {
+  const [action = 'ls', identifier] = p.positional;
+  const root = resolveMemoryPath();
+
+  if (action === 'where') {
+    out(p, { root }, () => root);
+    return;
+  }
+  if (action === 'status') {
+    const status = memoryStatus(root);
+    out(p, { root, status }, () => status);
+    return;
+  }
+  if (action === 'diff' && !identifier) {
+    const diff = memoryDiff(root);
+    out(p, { root, diff }, () => diff);
+    return;
+  }
+  if ((action === 'history' || action === 'log') && !identifier) {
+    const history = memoryHistory(root);
+    out(p, { root, history }, () => history);
+    return;
+  }
+  if (action === 'commit') {
+    const project = selectedMemoryProject(db, p);
+    reindexMemories(db, root, project);
+    const committed = commitMemory(root, str(p, 'message'));
+    out(p, { root, committed }, () => committed ? 'Memory changes committed.' : 'Could not initialize or commit memory history.');
+    return;
+  }
+
+  const project = selectedMemoryProject(db, p);
+  if (action === 'add' || action === 'remember') {
+    cmdRemember(db, p, 1);
+    return;
+  }
+  if (action === 'ls' || action === 'list') {
+    const memories = listMemories(db, root, project, { all: bool(p, 'all'), limit: num(p, 'limit') });
+    out(p, memories, () => memoryTable(memories));
+    return;
+  }
+  if (action === 'search' || action === 'find') {
+    const query = str(p, 'search') ?? p.positional.slice(1).join(' ');
+    const memories = searchMemories(db, root, project, query, {
+      all: bool(p, 'all'),
+      limit: num(p, 'limit'),
+    });
+    out(p, memories, () => memoryTable(memories));
+    return;
+  }
+  if (action === 'reindex' || action === 'sync') {
+    const memories = reindexMemories(db, root, project);
+    out(p, { root, indexed: memories.length }, () => `Indexed ${memories.length} memories from ${root}`);
+    return;
+  }
+  if (!identifier) throw new CliError(`Usage: orch memory ${action} <id>`);
+  const memory = getMemory(db, root, project, identifier);
+
+  if (action === 'show' || action === 'view') {
+    out(p, memory, () => memoryDetail(memory));
+    return;
+  }
+  if (action === 'diff') {
+    const diff = memoryDiff(root, memory.path);
+    out(p, { id: memory.id, diff }, () => diff);
+    return;
+  }
+  if (action === 'history' || action === 'log') {
+    const history = memoryHistory(root, memory.path);
+    out(p, { id: memory.id, history }, () => history);
+    return;
+  }
+  if (action === 'promote') {
+    const updated = updateMemory(db, root, project, memory.id, { status: 'active' });
+    out(p, updated, () => `${c.bold(updated.id.slice(0, 12))} → active`);
+    return;
+  }
+  if (action === 'archive' || action === 'forget') {
+    const updated = archiveMemory(db, root, project, memory.id);
+    out(p, updated, () => `${c.bold(updated.id.slice(0, 12))} → archived`);
+    return;
+  }
+  if (action === 'edit') {
+    const hasChanges = ['title', 'body', 'kind', 'status', 'tag', 'source', 'author', 'review-after', 'supersedes']
+      .some((name) => present(p, name)) || bool(p, 'verified') || bool(p, 'candidate');
+    if (!hasChanges) {
+      out(p, memory, () => `${memory.path}\n${c.dim('Edit this Markdown file directly, then run: orch memory commit')}`);
+      return;
+    }
+    const review = str(p, 'review-after');
+    const updated = updateMemory(db, root, project, memory.id, {
+      title: str(p, 'title'),
+      body: str(p, 'body'),
+      kind: parsedMemoryKind(p),
+      status: parsedMemoryStatus(p),
+      tags: present(p, 'tag') ? list(p, 'tag') : undefined,
+      sources: present(p, 'source') ? list(p, 'source') : undefined,
+      author: present(p, 'author') ? (str(p, 'author') ?? null) : undefined,
+      lastVerifiedAt: bool(p, 'verified') ? new Date().toISOString() : undefined,
+      reviewAfter: review ? parseWhenOrThrow(review).toISOString() : undefined,
+      supersedes: str(p, 'supersedes'),
+    });
+    out(p, updated, () => `${c.dim('updated')} ${c.bold(updated.id.slice(0, 12))}  ${updated.title}`);
+    return;
+  }
+
+  throw new CliError(`Unknown memory action "${action}". Use ls, search, show, edit, promote, archive, diff, history, status, commit, or reindex.`);
+}
+
+function cmdContext(db: Db, p: Parsed): void {
+  const task = requireTask(db, requirePositional(p, 0, 'orch context <task-ref>'));
+  const memory = memoryContextForTask(db, resolveMemoryPath(), task, num(p, 'limit') ?? 3);
+  out(p, { task_ref: task.ref, memory }, () =>
+    memory.pinned.length || memory.matches.length
+      ? memoryContextText(memory)
+      : c.dim(`No relevant memory for ${task.ref}.`),
+  );
+}
+
 function cmdDigest(db: Db, p: Parsed): void {
   const report = digest(db, str(p, 'project'));
   out(p, report, () => {
@@ -641,6 +846,9 @@ export async function main(argv: string[]): Promise<number> {
         return 0;
       }
       case 'project': case 'projects': cmdProject(db, p); return 0;
+      case 'remember': cmdRemember(db, p); return 0;
+      case 'memory': case 'memories': cmdMemory(db, p); return 0;
+      case 'context': cmdContext(db, p); return 0;
       case 'digest': cmdDigest(db, p); return 0;
       case 'feed': case 'activity': cmdFeed(db, p); return 0;
       case 'ui': case 'serve': await cmdUi(db, p); return 0;
@@ -663,4 +871,3 @@ export function run(): void {
       process.exitCode = 1;
     });
 }
-

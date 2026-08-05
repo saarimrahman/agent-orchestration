@@ -129,6 +129,41 @@ want it to run with your machine off.
 `orch digest` returns overdue, due-today, ready, in-progress, and abandoned
 leases in one payload — sized to drop straight into a prompt.
 
+## Durable memory
+
+Task comments preserve what happened on one piece of work. Durable memory holds
+the facts, decisions, pitfalls, preferences, and playbooks that should carry
+across tasks:
+
+```bash
+orch remember "UI tests need a production build first" -p demo \
+  --kind pitfall --tag ui --source demo-12 --verified
+
+orch memory search "UI build" -p demo
+orch memory show mem-a1b2c3d4
+orch memory edit mem-a1b2c3d4        # prints the Markdown path
+orch memory diff mem-a1b2c3d4
+orch memory history mem-a1b2c3d4
+```
+
+Markdown is canonical. By default it lives under `~/.orch/memory`, completely
+outside the source repository, with separate `global/` and `projects/<key>/`
+trees. Orch initializes that directory as its own private Git repository and
+commits writes made through the CLI, giving memories diffs and rollback without
+ever committing or pushing them to the project repository. Direct file edits
+remain visible in `orch memory diff`; use `orch memory commit` to save them.
+
+SQLite FTS5 supplies a rebuildable full-text index. `orch memory reindex`
+rescans the files, and ordinary searches also notice direct edits. Active
+matches are added, with a small context budget, to `orch show` and `orch next
+--claim`. Save uncertain information with `--candidate`; it is excluded from
+automatic recall until `orch memory promote <id>`.
+
+Each scope has a `MEMORY.md` index. Text you add outside its managed index block
+is pinned guidance; detailed topic files are retrieved only when relevant.
+Memories may contain retained Git history, so do not put credentials or other
+secrets in them.
+
 ## Commands
 
 | | |
@@ -142,7 +177,7 @@ leases in one payload — sized to drop straight into a prompt.
 | `orch inbox` | Everything waiting on you |
 | `orch add "<title>"` | Create — `-p` project, `-P` priority, `--due`, `--tag`, `--dep`, `--recur` |
 | `orch ls` | List — `--status`, `--tag`, `--project`, `--assignee`, `--due today`, `--all` |
-| `orch show <ref>` | Detail, comments, and history |
+| `orch show <ref>` | Detail, comments, history, and relevant durable memory |
 | `orch edit <ref>` | Change any field |
 | `orch comment <ref> "<text>"` | Note, or `--progress` for an agent update |
 | `orch start\|review\|done\|cancel <ref> ["note"]` | Status transitions |
@@ -150,6 +185,12 @@ leases in one payload — sized to drop straight into a prompt.
 | `orch dep add\|rm <ref> <blocker>` | Dependency graph |
 | `orch tag add\|rm <ref> <tag>` / `orch tags` | Tags |
 | `orch project add\|ls\|archive <key>` | Projects |
+| `orch remember "<learning>"` | Save a project memory; `--global` saves a global one |
+| `orch memory ls\|search\|show` | Browse the local Markdown memory store |
+| `orch memory edit\|promote\|archive <id>` | Maintain a memory's content and lifecycle |
+| `orch memory diff\|history\|status\|commit` | Inspect or save private memory history |
+| `orch memory reindex` | Rebuild full-text search from Markdown |
+| `orch context <ref>` | Relevant memory for one task, with a bounded result count |
 | `orch feed` | Recent activity across all tasks |
 | `orch ui [--port 4477] [--host]` | Open the board locally or on the network |
 | `orch instructions` | Print the agent workflow |
@@ -239,19 +280,24 @@ and make the new one exit.
 from many repos. Override with `$ORCH_DB`, or with a `.orch/config.json`
 (`{"db": "./orch.db"}`) anywhere up the tree from where you run the command.
 
+Durable Markdown memory lives at `~/.orch/memory` by default. Override it with
+`$ORCH_MEMORY_DIR`, or add `"memory": "<path>"` to `.orch/config.json`. This
+path is its own private Git repository and has no remote by default.
+
 `$ORCH_PROJECT` sets the default project when you omit `-p`. `$ORCH_ACTOR` sets
 who you are in the activity log when you omit `--agent`.
 
 ## Tests
 
 ```bash
-npm test        # 49 tests: queue semantics, claim contention, recurrence, API, UI render
+npm test        # queue, memory, API, packaging, and UI behavior
 npm run typecheck
 ```
 
 The suite covers the parts that are subtly wrong if untested: ready-queue
 filtering, concurrent claims on one task, lease expiry and reclaim, dependency
-cycles, recurrence firing exactly once, and the full ask/answer handoff. The UI
+cycles, recurrence firing exactly once, memory retrieval/versioning, and the
+full ask/answer handoff. The UI
 test bundles the real app and renders it against a real server in jsdom, which
 catches render crashes without needing a browser.
 

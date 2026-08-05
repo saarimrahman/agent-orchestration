@@ -25,6 +25,7 @@ import {
   detachTag,
   listComments,
   listEvents,
+  listMemories,
   listProjects,
   listTags,
   listTasks,
@@ -34,6 +35,7 @@ import {
   releaseTask,
   removeDep,
   requireTask,
+  resolveMemoryPath,
   setStatus,
   staleLeases,
   updateTask,
@@ -94,7 +96,10 @@ function tokenGate(token: string) {
   };
 }
 
-export function createApp(db: Db, options: { token?: string } = {}) {
+export function createApp(
+  db: Db,
+  options: { token?: string; memoryRoot?: string } = {},
+) {
   const app = new Hono();
 
   // Core throws plain Errors carrying guidance meant for the caller, so pass the
@@ -122,6 +127,22 @@ export function createApp(db: Db, options: { token?: string } = {}) {
       events: recentEvents(db, 60),
       marker: changeMarker(db),
     });
+  });
+
+  /** All durable memory, across global and project scopes, for the board. */
+  app.get('/api/memories', (ctx) => {
+    const root = options.memoryRoot ?? resolveMemoryPath();
+    const memories = new Map(
+      listMemories(db, root, null, { all: true, limit: 1_000 }).map((memory) => [memory.id, memory]),
+    );
+    for (const project of listProjects(db, true)) {
+      for (const memory of listMemories(db, root, project, { all: true, limit: 1_000 })) {
+        memories.set(memory.id, memory);
+      }
+    }
+    return ctx.json(
+      [...memories.values()].sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
+    );
   });
 
   app.get('/api/tasks/:ref', (ctx) => {

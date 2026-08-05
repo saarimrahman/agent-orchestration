@@ -24,7 +24,10 @@ export default defineConfig({
     allowedHosts: exposed ? true : undefined,
     // `npm run dev` starts this alongside the API server and forwards calls to it.
     proxy: {
-      '/api': {
+      // Keep the trailing slash in the match. A broad `/api` prefix also catches
+      // the frontend module `/api.ts` and replaces it with backend HTML, leaving
+      // the browser with a titled but completely blank page.
+      '^/api/': {
         target: `http://127.0.0.1:${process.env.ORCH_API_PORT ?? 4477}`,
         changeOrigin: true,
       },

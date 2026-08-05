@@ -51,6 +51,22 @@ Priority is 0-3, 0 highest, 2 default. \`--due\` accepts \`friday\`,
 \`tomorrow 9am\`, \`3d\`, or \`2026-08-12\`. \`--recur "0 9 * * 1"\` makes it repeat:
 closing it creates the next occurrence automatically.
 
+### Durable memory
+
+\`orch show <ref>\` and \`orch next --claim\` include a small set of active memories
+relevant to the task. When you verify a reusable fact, pitfall, decision, or
+workflow, preserve it with:
+
+\`\`\`
+orch remember "UI tests need a production build first" -p demo \\
+  --kind pitfall --tag ui --source demo-12 --verified
+\`\`\`
+
+Use \`orch memory search "<query>" --json\` for explicit recall. Use
+\`--candidate\` for an unverified learning; candidates stay out of automatic
+task context until \`orch memory promote <id>\`. Memory is local Markdown under
+\`~/.orch/memory\` by default, not the source repository. Do not store secrets.
+
 ### Reading the board
 
 - \`orch ready --json\` — what is claimable right now

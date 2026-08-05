@@ -119,8 +119,62 @@ CREATE INDEX idx_events_task      ON events(task_id);
 CREATE INDEX idx_events_at        ON events(at);
 `;
 
+const MEMORY_SCHEMA = `
+CREATE TABLE memory_documents (
+  id               TEXT PRIMARY KEY,
+  project_id       INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  scope            TEXT NOT NULL,
+  kind             TEXT NOT NULL,
+  status           TEXT NOT NULL,
+  title            TEXT NOT NULL,
+  path             TEXT NOT NULL UNIQUE,
+  tags             TEXT NOT NULL DEFAULT '[]',
+  sources          TEXT NOT NULL DEFAULT '[]',
+  author           TEXT,
+  body             TEXT NOT NULL,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL,
+  last_verified_at TEXT,
+  review_after     TEXT,
+  supersedes       TEXT,
+  content_hash     TEXT NOT NULL
+);
+
+CREATE INDEX idx_memory_project ON memory_documents(project_id);
+CREATE INDEX idx_memory_scope   ON memory_documents(scope);
+CREATE INDEX idx_memory_status  ON memory_documents(status);
+CREATE INDEX idx_memory_updated ON memory_documents(updated_at);
+
+CREATE VIRTUAL TABLE memory_fts USING fts5(
+  id UNINDEXED,
+  title,
+  body,
+  tags,
+  content='memory_documents',
+  content_rowid='rowid',
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER memory_documents_ai AFTER INSERT ON memory_documents BEGIN
+  INSERT INTO memory_fts(rowid, id, title, body, tags)
+  VALUES (new.rowid, new.id, new.title, new.body, new.tags);
+END;
+
+CREATE TRIGGER memory_documents_ad AFTER DELETE ON memory_documents BEGIN
+  INSERT INTO memory_fts(memory_fts, rowid, id, title, body, tags)
+  VALUES ('delete', old.rowid, old.id, old.title, old.body, old.tags);
+END;
+
+CREATE TRIGGER memory_documents_au AFTER UPDATE ON memory_documents BEGIN
+  INSERT INTO memory_fts(memory_fts, rowid, id, title, body, tags)
+  VALUES ('delete', old.rowid, old.id, old.title, old.body, old.tags);
+  INSERT INTO memory_fts(rowid, id, title, body, tags)
+  VALUES (new.rowid, new.id, new.title, new.body, new.tags);
+END;
+`;
+
 /** Ordered list of migrations. Index + 1 is the resulting `user_version`. */
-const MIGRATIONS: string[] = [SCHEMA];
+const MIGRATIONS: string[] = [SCHEMA, MEMORY_SCHEMA];
 
 export type Db = DatabaseSync;
 
