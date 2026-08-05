@@ -45,6 +45,7 @@ import {
   removeDep,
   requireTask,
   requireProject,
+  envSetting,
   resolveDbPath,
   resolveMemoryPath,
   rememberMemory,
@@ -79,9 +80,9 @@ import {
   taskTable,
 } from './format.ts';
 
-const HELP = `orch — a local to-do queue that agents can read, claim, and report to.
+const HELP = `orchestration — a local to-do queue that agents can read, claim, and report to.
 
-Usage: orch <command> [options]
+Usage: orchestration <command> [options]
 
 Queue
   ready                     Everything claimable right now
@@ -111,7 +112,7 @@ Structure
   tags                      Tags in use
   project add|ls|archive|unarchive [key]
 
-Memory (stored outside the repo in ~/.orch/memory)
+Memory (stored outside the repo in ~/.orchestration/memory)
   remember "<learning>"     Save a durable project memory
   memory ls|search|show     Find and inspect memories
   memory edit|promote|archive <id>
@@ -140,8 +141,8 @@ function actor(p: Parsed): string {
   return (
     str(p, 'agent') ??
     str(p, 'as') ??
-    process.env.ORCH_ACTOR ??
-    process.env.ORCH_AGENT ??
+    envSetting('ACTOR') ??
+    envSetting('AGENT') ??
     userInfo().username
   );
 }
@@ -149,15 +150,15 @@ function actor(p: Parsed): string {
 /**
  * Who to credit for an action on a task already in hand. Falls back to the
  * current assignee before the OS user, so an agent that claimed as `bruno` and
- * then ran `orch ask` without repeating `--agent` is still recorded as bruno
+ * then ran `orchestration ask` without repeating `--agent` is still recorded as bruno
  * rather than as whoever owns the shell.
  */
 function actorFor(p: Parsed, task: TaskView): string {
   return (
     str(p, 'agent') ??
     str(p, 'as') ??
-    process.env.ORCH_ACTOR ??
-    process.env.ORCH_AGENT ??
+    envSetting('ACTOR') ??
+    envSetting('AGENT') ??
     task.assignee ??
     userInfo().username
   );
@@ -205,7 +206,7 @@ function cmdInit(db: Db, p: Parsed): void {
   const root = process.cwd();
   const written: string[] = [];
 
-  const skillPath = join(root, '.claude', 'skills', 'orch', 'SKILL.md');
+  const skillPath = join(root, '.claude', 'skills', 'orchestration', 'SKILL.md');
   if (!existsSync(skillPath) || bool(p, 'force')) {
     mkdirSync(dirname(skillPath), { recursive: true });
     writeFileSync(skillPath, skillFile());
@@ -223,15 +224,15 @@ function cmdInit(db: Db, p: Parsed): void {
       `Project   ${project.key}`,
       ...written.map((f) => `Wrote     ${f.replace(`${root}/`, '')}`),
       '',
-      `Add your first task:  ${c.bold(`orch add "Something to do" -p ${project.key}`)}`,
-      `Open the board:       ${c.bold('orch ui')}`,
+      `Add your first task:  ${c.bold(`orchestration add "Something to do" -p ${project.key}`)}`,
+      `Open the board:       ${c.bold('orchestration ui')}`,
     ].join('\n'),
   );
 }
 
 function cmdAdd(db: Db, p: Parsed): void {
   const title = p.positional.join(' ').trim();
-  if (!title) throw new CliError('What should the task be called?  orch add "Fix the parser"');
+  if (!title) throw new CliError('What should the task be called?  orchestration add "Fix the parser"');
 
   const recur = str(p, 'recur');
   if (recur && !isValidCron(recur)) {
@@ -314,7 +315,7 @@ function cmdNext(db: Db, p: Parsed): number {
 }
 
 function cmdClaim(db: Db, p: Parsed): number {
-  const task = requireTask(db, requirePositional(p, 0, 'orch claim <ref>'));
+  const task = requireTask(db, requirePositional(p, 0, 'orchestration claim <ref>'));
   const claimed = claimTask(db, task.id, actor(p), leaseMs(p));
 
   if (!claimed) {
@@ -323,7 +324,7 @@ function cmdClaim(db: Db, p: Parsed): number {
       current.blocked_by.length
         ? `${task.ref} is blocked by ${current.blocked_by.join(', ')}.`
         : current.assignee
-          ? `${task.ref} is already held by ${current.assignee}. Try "orch next --claim".`
+          ? `${task.ref} is already held by ${current.assignee}. Try "orchestration next --claim".`
           : `${task.ref} is not claimable (status: ${current.status}).`,
     );
   }
@@ -332,12 +333,12 @@ function cmdClaim(db: Db, p: Parsed): number {
 }
 
 function cmdRelease(db: Db, p: Parsed): void {
-  const task = requireTask(db, requirePositional(p, 0, 'orch release <ref>'));
+  const task = requireTask(db, requirePositional(p, 0, 'orchestration release <ref>'));
   emitTask(p, releaseTask(db, task.id, actor(p)), 'released');
 }
 
 function cmdShow(db: Db, p: Parsed): void {
-  const task = requireTask(db, requirePositional(p, 0, 'orch show <ref>'));
+  const task = requireTask(db, requirePositional(p, 0, 'orchestration show <ref>'));
   const comments = listComments(db, task.id);
   const events = listEvents(db, task.id);
   const memory = memoryContextForTask(db, resolveMemoryPath(), task);
@@ -345,7 +346,7 @@ function cmdShow(db: Db, p: Parsed): void {
 }
 
 function cmdComment(db: Db, p: Parsed): void {
-  const task = requireTask(db, requirePositional(p, 0, 'orch comment <ref> "<text>"'));
+  const task = requireTask(db, requirePositional(p, 0, 'orchestration comment <ref> "<text>"'));
   const body = str(p, 'message') ?? p.positional.slice(1).join(' ');
   if (!body.trim()) throw new CliError('What should the comment say?');
 
@@ -360,7 +361,7 @@ function cmdComment(db: Db, p: Parsed): void {
 }
 
 function cmdStatus(db: Db, p: Parsed, status: Status): void {
-  const task = requireTask(db, requirePositional(p, 0, `orch ${status} <ref>`));
+  const task = requireTask(db, requirePositional(p, 0, `orchestration ${status} <ref>`));
   const note = str(p, 'message') ?? p.positional.slice(1).join(' ');
   const who = actorFor(p, task);
   if (note.trim()) addComment(db, task.id, who, note, 'progress');
@@ -384,10 +385,10 @@ function cmdStatus(db: Db, p: Parsed, status: Status): void {
 }
 
 function cmdAsk(db: Db, p: Parsed): void {
-  const task = requireTask(db, requirePositional(p, 0, 'orch ask <ref> "<question>"'));
+  const task = requireTask(db, requirePositional(p, 0, 'orchestration ask <ref> "<question>"'));
   const question = str(p, 'message') ?? p.positional.slice(1).join(' ');
   if (!question.trim()) {
-    throw new CliError('What do you need to know?  orch ask demo-3 "Which auth flow?"');
+    throw new CliError('What do you need to know?  orchestration ask demo-3 "Which auth flow?"');
   }
 
   const { task: updated } = askForInput(db, task.id, actorFor(p, task), question);
@@ -400,7 +401,7 @@ function cmdAsk(db: Db, p: Parsed): void {
 }
 
 function cmdAnswer(db: Db, p: Parsed): void {
-  const task = requireTask(db, requirePositional(p, 0, 'orch answer <ref> "<answer>"'));
+  const task = requireTask(db, requirePositional(p, 0, 'orchestration answer <ref> "<answer>"'));
   const answer = str(p, 'message') ?? p.positional.slice(1).join(' ');
   if (!answer.trim()) throw new CliError('What is the answer?');
 
@@ -421,7 +422,7 @@ function cmdAsking(db: Db, p: Parsed): void {
         [
           `${c.bold(t.ref)}  ${t.title}`,
           `  ${c.magenta(t.question_from ?? 'agent')} asks: ${t.question ?? ''}`,
-          c.dim(`  answer with: orch answer ${t.ref} "..."`),
+          c.dim(`  answer with: orchestration answer ${t.ref} "..."`),
         ].join('\n'),
       )
       .join('\n\n');
@@ -429,9 +430,9 @@ function cmdAsking(db: Db, p: Parsed): void {
 }
 
 function cmdSnooze(db: Db, p: Parsed): void {
-  const task = requireTask(db, requirePositional(p, 0, 'orch snooze <ref> <when>'));
+  const task = requireTask(db, requirePositional(p, 0, 'orchestration snooze <ref> <when>'));
   const when = p.positional.slice(1).join(' ') || str(p, 'until');
-  if (!when) throw new CliError('Snooze until when?  orch snooze demo-3 3d');
+  if (!when) throw new CliError('Snooze until when?  orchestration snooze demo-3 3d');
 
   const until = parseWhenOrThrow(when);
   const updated = updateTask(db, task.id, { snoozeUntil: until }, actor(p));
@@ -439,7 +440,7 @@ function cmdSnooze(db: Db, p: Parsed): void {
 }
 
 function cmdEdit(db: Db, p: Parsed): void {
-  const task = requireTask(db, requirePositional(p, 0, 'orch edit <ref> [options]'));
+  const task = requireTask(db, requirePositional(p, 0, 'orchestration edit <ref> [options]'));
   const title = p.positional.slice(1).join(' ').trim();
   const due = str(p, 'due');
   const recur = str(p, 'recur');
@@ -470,7 +471,7 @@ function cmdEdit(db: Db, p: Parsed): void {
 }
 
 function cmdRm(db: Db, p: Parsed): void {
-  const task = requireTask(db, requirePositional(p, 0, 'orch rm <ref>'));
+  const task = requireTask(db, requirePositional(p, 0, 'orchestration rm <ref>'));
   deleteTask(db, task.id, actor(p));
   out(p, { deleted: task.ref }, () => `${c.dim('deleted')} ${task.ref}`);
 }
@@ -478,7 +479,7 @@ function cmdRm(db: Db, p: Parsed): void {
 function cmdDep(db: Db, p: Parsed): void {
   const [action, taskRef, blockerRef] = p.positional;
   if (!action || !taskRef || !blockerRef) {
-    throw new CliError('Usage: orch dep add|rm <ref> <blocker-ref>');
+    throw new CliError('Usage: orchestration dep add|rm <ref> <blocker-ref>');
   }
   const task = requireTask(db, taskRef);
   const blocker = requireTask(db, blockerRef);
@@ -494,7 +495,7 @@ function cmdDep(db: Db, p: Parsed): void {
 function cmdTag(db: Db, p: Parsed): void {
   const [action, taskRef, ...names] = p.positional;
   if (!action || !taskRef || !names.length) {
-    throw new CliError('Usage: orch tag add|rm <ref> <tag>...');
+    throw new CliError('Usage: orchestration tag add|rm <ref> <tag>...');
   }
   const task = requireTask(db, taskRef);
   for (const name of names) {
@@ -519,12 +520,12 @@ function cmdProject(db: Db, p: Parsed): void {
               return `${c.bold(x.key.padEnd(12))} ${x.name}${suffix}  ${c.dim(`${open} open`)}`;
             })
             .join('\n')
-        : c.dim('No projects. Try: orch project add <key>'),
+        : c.dim('No projects. Try: orchestration project add <key>'),
     );
     return;
   }
 
-  if (!key) throw new CliError(`Usage: orch project ${action} <key>`);
+  if (!key) throw new CliError(`Usage: orchestration project ${action} <key>`);
 
   if (action === 'add') {
     const project = createProject(db, key, str(p, 'name'), str(p, 'color'));
@@ -564,7 +565,7 @@ function parsedMemoryStatus(p: Parsed): MemoryStatus | undefined {
 function cmdRemember(db: Db, p: Parsed, positionalStart = 0): void {
   const body = str(p, 'body') ?? str(p, 'message') ?? p.positional.slice(positionalStart).join(' ');
   if (!body.trim()) {
-    throw new CliError('What should be remembered?  orch remember "The UI tests need a build first"');
+    throw new CliError('What should be remembered?  orchestration remember "The UI tests need a build first"');
   }
   const project = selectedMemoryProject(db, p);
   const review = str(p, 'review-after');
@@ -639,7 +640,7 @@ function cmdMemory(db: Db, p: Parsed): void {
     out(p, { root, indexed: memories.length }, () => `Indexed ${memories.length} memories from ${root}`);
     return;
   }
-  if (!identifier) throw new CliError(`Usage: orch memory ${action} <id>`);
+  if (!identifier) throw new CliError(`Usage: orchestration memory ${action} <id>`);
   const memory = getMemory(db, root, project, identifier);
 
   if (action === 'show' || action === 'view') {
@@ -670,7 +671,7 @@ function cmdMemory(db: Db, p: Parsed): void {
     const hasChanges = ['title', 'body', 'kind', 'status', 'tag', 'source', 'author', 'review-after', 'supersedes']
       .some((name) => present(p, name)) || bool(p, 'verified') || bool(p, 'candidate');
     if (!hasChanges) {
-      out(p, memory, () => `${memory.path}\n${c.dim('Edit this Markdown file directly, then run: orch memory commit')}`);
+      out(p, memory, () => `${memory.path}\n${c.dim('Edit this Markdown file directly, then run: orchestration memory commit')}`);
       return;
     }
     const review = str(p, 'review-after');
@@ -694,7 +695,7 @@ function cmdMemory(db: Db, p: Parsed): void {
 }
 
 function cmdContext(db: Db, p: Parsed): void {
-  const task = requireTask(db, requirePositional(p, 0, 'orch context <task-ref>'));
+  const task = requireTask(db, requirePositional(p, 0, 'orchestration context <task-ref>'));
   const memory = memoryContextForTask(db, resolveMemoryPath(), task, num(p, 'limit') ?? 3);
   out(p, { task_ref: task.ref, memory }, () =>
     memory.pinned.length || memory.matches.length
@@ -741,13 +742,13 @@ async function cmdUi(db: Db, p: Parsed): Promise<void> {
   // from every other dev server.
   const host = present(p, 'host')
     ? (str(p, 'host') ?? '0.0.0.0')
-    : (process.env.ORCH_HOST ?? '127.0.0.1');
+    : (envSetting('HOST') ?? '127.0.0.1');
 
   let token: string | undefined;
   if (!isLoopback(host) && !bool(p, 'no-auth')) {
     // Off-loopback the board is readable and writable by anyone who can reach
     // the port, so it gets a shared secret unless you explicitly opt out.
-    token = str(p, 'token') ?? process.env.ORCH_TOKEN ?? randomBytes(16).toString('base64url');
+    token = str(p, 'token') ?? envSetting('TOKEN') ?? randomBytes(16).toString('base64url');
   }
 
   await startServer(db, {
@@ -792,7 +793,7 @@ function requirePositional(p: Parsed, index: number, usage: string): string {
 // ------------------------------------------------------------------ dispatch
 
 export async function main(argv: string[]): Promise<number> {
-  // A leading flag (`orch --help`, `orch --version`) is not a command.
+  // A leading flag (`orchestration --help`, `orchestration --version`) is not a command.
   const hasCommand = argv.length > 0 && !argv[0].startsWith('-');
   const command = hasCommand ? argv[0] : '';
   const p = parseArgs(hasCommand ? argv.slice(1) : argv);

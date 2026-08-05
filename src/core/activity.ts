@@ -38,7 +38,7 @@ export function addComment(
 /**
  * Hand a task back to a human with a question. The lease is dropped so the task
  * is not counted as work in flight, and the status change keeps it out of the
- * ready queue until somebody answers — an agent polling `orch next` will not
+ * ready queue until somebody answers — an agent polling `orchestration next` will not
  * pick up a question it cannot answer itself.
  */
 export function askForInput(
@@ -154,7 +154,7 @@ export type Digest = {
 
 /**
  * The triage payload. Designed to be piped straight into an agent prompt —
- * `claude -p "$(orch digest --json) — triage these"` — which is how scheduling
+ * `claude -p "$(orchestration digest --json) — triage these"` — which is how scheduling
  * works without this project running any daemon of its own.
  */
 export function digest(db: Db, project?: string): Digest {

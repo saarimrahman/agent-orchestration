@@ -132,7 +132,7 @@ export function requireTask(db: Db, ident: string): TaskView {
   if (task) return task;
   throw new Error(
     `No task "${ident}". Refs look like "demo-4"; a bare number is treated as a task id. ` +
-      `Run "orch ls" to see what exists.`,
+      `Run "orchestration ls" to see what exists.`,
   );
 }
 

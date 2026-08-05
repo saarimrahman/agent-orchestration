@@ -15,6 +15,7 @@ import { spawnSync } from 'node:child_process';
 
 import type { Db } from './db.ts';
 import { nowIso, tx } from './db.ts';
+import { CONFIG_DIRS, envSetting } from './env.ts';
 import type { Project, TaskView } from './types.ts';
 import { requireProject } from './projects.ts';
 
@@ -62,8 +63,20 @@ export type MemoryContext = {
   matches: MemorySearchResult[];
 };
 
-const INDEX_BEGIN = '<!-- orch:index:begin -->';
-const INDEX_END = '<!-- orch:index:end -->';
+const INDEX_BEGIN = '<!-- orchestration:index:begin -->';
+const INDEX_END = '<!-- orchestration:index:end -->';
+
+// Index files written before the rename carry the old markers. Reading both
+// means an existing MEMORY.md is rewritten in place on the next refresh instead
+// of collecting a second, competing index block.
+const LEGACY_INDEX_BEGIN = '<!-- orch:index:begin -->';
+const LEGACY_INDEX_END = '<!-- orch:index:end -->';
+
+function indexBlockPattern(): RegExp {
+  return new RegExp(
+    `(?:${INDEX_BEGIN}|${LEGACY_INDEX_BEGIN})[\\s\\S]*?(?:${INDEX_END}|${LEGACY_INDEX_END})`,
+  );
+}
 
 const KIND_DIRECTORIES: Record<MemoryKind, string> = {
   fact: 'facts',
@@ -88,19 +101,21 @@ function expandConfiguredPath(value: string, base: string): string {
 
 /**
  * Memory is deliberately separate from the working repository by default.
- * A project can opt into another location in `.orch/config.json`, but even
- * then orch creates a nested private Git repository and never commits to an
- * enclosing source repository.
+ * A project can opt into another location in `.orchestration/config.json`, but
+ * even then orchestration creates a nested private Git repository and never
+ * commits to an enclosing source repository. As with the database, the older
+ * `.orch` locations are still read so memory written before the rename is not
+ * orphaned.
  */
 export function resolveMemoryPath(cwd = process.cwd()): string {
-  if (process.env.ORCH_MEMORY_DIR) {
-    return expandConfiguredPath(process.env.ORCH_MEMORY_DIR, cwd);
-  }
+  const configured = envSetting('MEMORY_DIR');
+  if (configured) return expandConfiguredPath(configured, cwd);
 
   let dir = resolve(cwd);
   for (;;) {
-    const config = join(dir, '.orch', 'config.json');
-    if (existsSync(config)) {
+    for (const name of CONFIG_DIRS) {
+      const config = join(dir, name, 'config.json');
+      if (!existsSync(config)) continue;
       try {
         const parsed = JSON.parse(readFileSync(config, 'utf8')) as { memory?: unknown };
         if (typeof parsed.memory === 'string' && parsed.memory.trim()) {
@@ -109,7 +124,7 @@ export function resolveMemoryPath(cwd = process.cwd()): string {
       } catch (err) {
         throw new Error(
           `Could not read ${config}: ${(err as Error).message}\n` +
-            `Expected JSON shaped like {"memory": "~/.orch/memory"}.`,
+            `Expected JSON shaped like {"memory": "~/.orchestration/memory"}.`,
         );
       }
     }
@@ -118,7 +133,10 @@ export function resolveMemoryPath(cwd = process.cwd()): string {
     dir = parent;
   }
 
-  return join(homedir(), '.orch', 'memory');
+  const legacy = join(homedir(), '.orch', 'memory');
+  const current = join(homedir(), '.orchestration', 'memory');
+  if (!existsSync(current) && existsSync(legacy)) return legacy;
+  return current;
 }
 
 export function memoryScopePath(root: string, project: Project | null): string {
@@ -404,7 +422,7 @@ function memoryByIdentifier(
      WHERE ${scope.sql} AND (d.id = ? OR d.id LIKE ?)
      ORDER BY d.id`,
   ).all(...scope.params, identifier, `${identifier}%`) as unknown as Record<string, unknown>[];
-  if (!rows.length) throw new Error(`No memory "${identifier}". Run "orch memory ls" to see what exists.`);
+  if (!rows.length) throw new Error(`No memory "${identifier}". Run "orchestration memory ls" to see what exists.`);
   if (rows.length > 1) {
     throw new Error(`Memory prefix "${identifier}" is ambiguous: ${rows.map((row) => row.id).join(', ')}.`);
   }
@@ -483,8 +501,8 @@ function refreshMemoryIndex(root: string, project: Project | null): string {
   const managed = `${INDEX_BEGIN}\n${entries}\n${INDEX_END}`;
   const heading = project ? `# Memory: ${project.key}` : '# Global memory';
   const existing = existsSync(path) ? readFileSync(path, 'utf8') : `${heading}\n\n`;
-  const next = existing.includes(INDEX_BEGIN) && existing.includes(INDEX_END)
-    ? existing.replace(new RegExp(`${INDEX_BEGIN}[\\s\\S]*?${INDEX_END}`), managed)
+  const next = indexBlockPattern().test(existing)
+    ? existing.replace(indexBlockPattern(), managed)
     : `${existing.trimEnd()}\n\n${managed}\n`;
   atomicWrite(path, next.endsWith('\n') ? next : `${next}\n`);
   return path;
@@ -515,8 +533,8 @@ function commitMemoryChanges(root: string, paths: string[], message: string): bo
   if (added.status !== 0) return false;
   if (git(root, ['diff', '--cached', '--quiet']).status === 0) return true;
   const committed = git(root, [
-    '-c', 'user.name=orch',
-    '-c', 'user.email=orch@local',
+    '-c', 'user.name=orchestration',
+    '-c', 'user.email=orchestration@local',
     '-c', 'commit.gpgsign=false',
     'commit', '-q', '-m', message, '--', ...relativePaths,
   ]);
@@ -681,7 +699,7 @@ function memoryPreamble(root: string, project: Project | null): string | null {
   const path = indexPath(root, project);
   if (!existsSync(path)) return null;
   const raw = readFileSync(path, 'utf8');
-  const withoutIndex = raw.replace(new RegExp(`${INDEX_BEGIN}[\\s\\S]*?${INDEX_END}`), '');
+  const withoutIndex = raw.replace(indexBlockPattern(), '');
   const withoutHeading = withoutIndex.replace(/^#\s+[^\n]+(?:\r?\n)*/, '').trim();
   return withoutHeading ? withoutHeading.slice(0, 1500) : null;
 }
@@ -736,8 +754,8 @@ export function commitMemory(root: string, message = 'memory: save direct edits'
   if (added.status !== 0) return false;
   if (git(root, ['diff', '--cached', '--quiet']).status === 0) return true;
   return git(root, [
-    '-c', 'user.name=orch',
-    '-c', 'user.email=orch@local',
+    '-c', 'user.name=orchestration',
+    '-c', 'user.email=orchestration@local',
     '-c', 'commit.gpgsign=false',
     'commit', '-q', '-m', message,
   ]).status === 0;

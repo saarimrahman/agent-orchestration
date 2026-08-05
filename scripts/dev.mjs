@@ -78,7 +78,7 @@ process.on('SIGTERM', () => shutdown(0));
 // The API server stays on loopback even when the board is exposed: Vite proxies
 // /api server-side, so nothing needs to reach the API directly from outside.
 children.push(
-  start('api', process.execPath, [join(ROOT, 'bin', 'orch'), 'ui', '--port', API_PORT, '--no-open'], {}),
+  start('api', process.execPath, [join(ROOT, 'bin', 'orchestration'), 'ui', '--port', API_PORT, '--no-open'], {}),
 );
 children.push(
   start('web', 'npx', ['vite', '--port', WEB_PORT, '--strictPort', '--host', HOST], {

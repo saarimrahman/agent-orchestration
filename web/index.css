@@ -66,31 +66,31 @@ body {
 }
 
 /* Markdown rendered inside the task drawer. */
-.prose-orch {
+.prose-orchestration {
   line-height: 1.65;
 }
-.prose-orch p {
+.prose-orchestration p {
   margin: 0 0 0.75em;
 }
-.prose-orch ul,
-.prose-orch ol {
+.prose-orchestration ul,
+.prose-orchestration ol {
   margin: 0 0 0.75em;
   padding-left: 1.35em;
 }
-.prose-orch ul {
+.prose-orchestration ul {
   list-style: disc;
 }
-.prose-orch ol {
+.prose-orchestration ol {
   list-style: decimal;
 }
-.prose-orch code {
+.prose-orchestration code {
   background: var(--color-ink-850);
   border: 1px solid var(--color-ink-800);
   border-radius: 4px;
   padding: 0.1em 0.35em;
   font-size: 0.9em;
 }
-.prose-orch pre {
+.prose-orchestration pre {
   background: var(--color-ink-900);
   border: 1px solid var(--color-ink-800);
   border-radius: 8px;
@@ -98,32 +98,32 @@ body {
   overflow-x: auto;
   margin: 0 0 0.75em;
 }
-.prose-orch pre code {
+.prose-orchestration pre code {
   background: none;
   border: none;
   padding: 0;
 }
-.prose-orch h1,
-.prose-orch h2,
-.prose-orch h3 {
+.prose-orchestration h1,
+.prose-orchestration h2,
+.prose-orchestration h3 {
   color: var(--color-ink-50);
   font-weight: 600;
   margin: 1.2em 0 0.5em;
 }
-.prose-orch h1 {
+.prose-orchestration h1 {
   font-size: 1.2em;
 }
-.prose-orch h2 {
+.prose-orchestration h2 {
   font-size: 1.1em;
 }
-.prose-orch h3 {
+.prose-orchestration h3 {
   font-size: 1em;
 }
-.prose-orch a {
+.prose-orchestration a {
   color: var(--color-accent);
   text-decoration: underline;
 }
-.prose-orch blockquote {
+.prose-orchestration blockquote {
   border-left: 2px solid var(--color-ink-700);
   padding-left: 0.9em;
   color: var(--color-ink-400);

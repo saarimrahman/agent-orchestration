@@ -1,5 +1,6 @@
 export * from './types.ts';
 export * from './db.ts';
+export * from './env.ts';
 export * from './time.ts';
 export * from './projects.ts';
 export * from './tasks.ts';

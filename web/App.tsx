@@ -120,7 +120,7 @@ export function App() {
       <nav className="flex w-[196px] shrink-0 flex-col gap-5 border-r border-ink-850 bg-ink-900 px-3 py-4">
         <div className="flex items-center gap-2 px-1">
           <span className="h-2.5 w-2.5 rounded-sm bg-accent" />
-          <span className="text-[13px] font-semibold tracking-tight text-ink-50">orch</span>
+          <span className="text-[13px] font-semibold tracking-tight text-ink-50">orchestration</span>
         </div>
 
         <button

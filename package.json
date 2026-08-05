@@ -1,11 +1,12 @@
 {
-  "name": "orch",
+  "name": "orchestration",
   "version": "0.1.0",
   "description": "A local to-do system that agents can read, claim, and report progress to.",
   "type": "module",
   "license": "MIT",
   "bin": {
-    "orch": "./bin/orch"
+    "orchestration": "./bin/orchestration",
+    "orch": "./bin/orchestration"
   },
   "engines": {
     "node": ">=22.6.0"
@@ -16,11 +17,11 @@
     "dist"
   ],
   "scripts": {
-    "orch": "node ./bin/orch",
+    "orchestration": "node ./bin/orchestration",
     "dev": "node ./scripts/dev.mjs",
     "dev:web": "vite",
     "build": "vite build",
-    "start": "node ./bin/orch ui",
+    "start": "node ./bin/orchestration ui",
     "test": "node --disable-warning=ExperimentalWarning --test --test-force-exit",
     "typecheck": "tsc --noEmit"
   },

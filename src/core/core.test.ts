@@ -392,7 +392,7 @@ describe('errors are actionable', () => {
   });
 
   test('an unknown ref explains the format', () => {
-    assert.throws(() => requireTask(db, 'demo-999'), /orch ls/);
+    assert.throws(() => requireTask(db, 'demo-999'), /orchestration ls/);
   });
 
   test('an out-of-range priority names the range', () => {
@@ -426,7 +426,7 @@ describe('AGENTS.md merge', () => {
     const once = mergeAgentsFile('# Project\n\nSome notes.\n');
     const twice = mergeAgentsFile(once);
 
-    assert.equal(twice.match(/orch:begin/g)?.length, 1);
+    assert.equal(twice.match(/orchestration:begin/g)?.length, 1);
     assert.ok(twice.startsWith('# Project\n\nSome notes.\n'));
   });
 });

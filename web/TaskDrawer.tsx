@@ -118,7 +118,7 @@ export function TaskDrawer({
               {task.question_from ?? 'An agent'} is waiting on you
             </p>
             <div
-              className="prose-orch mt-1.5 text-[13px] text-ink-100"
+              className="prose-orchestration mt-1.5 text-[13px] text-ink-100"
               dangerouslySetInnerHTML={{ __html: renderMarkdown(task.question) }}
             />
             <textarea
@@ -384,7 +384,7 @@ export function TaskDrawer({
             />
           ) : task.body.trim() ? (
             <div
-              className="prose-orch mt-1 text-[13px] text-ink-200"
+              className="prose-orchestration mt-1 text-[13px] text-ink-200"
               dangerouslySetInnerHTML={{ __html: renderMarkdown(task.body) }}
             />
           ) : (
@@ -429,7 +429,7 @@ export function TaskDrawer({
                     <span className="text-[11px] text-ink-600">{relativeTime(c.created_at)}</span>
                   </div>
                   <div
-                    className="prose-orch mt-0.5 text-[13px] break-words text-ink-300"
+                    className="prose-orchestration mt-0.5 text-[13px] break-words text-ink-300"
                     dangerouslySetInnerHTML={{ __html: renderMarkdown(c.body) }}
                   />
                 </div>

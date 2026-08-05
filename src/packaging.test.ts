@@ -44,7 +44,7 @@ describe('packaging', () => {
 
   test('the server and the dev proxy agree on the API port', () => {
     const config = readFileSync(join(ROOT, 'vite.config.ts'), 'utf8');
-    const proxyPort = /ORCH_API_PORT \?\? (\d+)/.exec(config)?.[1];
+    const proxyPort = /ORCHESTRATION_API_PORT \?\? process\.env\.ORCH_API_PORT \?\? (\d+)/.exec(config)?.[1];
     const serverDefault = /num\(p, 'port'\) \?\? (\d+)/.exec(
       readFileSync(join(ROOT, 'src', 'cli', 'index.ts'), 'utf8'),
     )?.[1];
@@ -67,7 +67,7 @@ describe('packaging', () => {
     const config = readFileSync(join(ROOT, 'vite.config.ts'), 'utf8');
     // Vite's own default binds ::1 only, which makes http://127.0.0.1 refuse
     // connections and look exactly like a broken app.
-    assert.match(config, /ORCH_HOST \?\? '127\.0\.0\.1'/);
+    assert.match(config, /ORCHESTRATION_HOST \?\? process\.env\.ORCH_HOST \?\? '127\.0\.0\.1'/);
     assert.match(config, /host,/, 'the resolved host must be passed to the server');
   });
 
@@ -80,7 +80,7 @@ describe('packaging', () => {
 
   test('checked-in agent instructions match the generated workflow', () => {
     const agents = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8');
-    const skill = readFileSync(join(ROOT, '.claude', 'skills', 'orch', 'SKILL.md'), 'utf8');
+    const skill = readFileSync(join(ROOT, '.claude', 'skills', 'orchestration', 'SKILL.md'), 'utf8');
 
     assert.ok(agents.includes(agentsBlock().trim()), 'AGENTS.md must match the workflow source');
     assert.equal(skill, skillFile(), 'the installed skill must match the workflow source');

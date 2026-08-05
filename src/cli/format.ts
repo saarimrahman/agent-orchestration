@@ -116,7 +116,7 @@ export function taskDetail(
   if (task.question) {
     out.push('', c.magenta(`${task.question_from ?? 'An agent'} is waiting on you:`));
     for (const line of task.question.split('\n')) out.push(`  ${line}`);
-    out.push(c.dim(`  answer with: orch answer ${task.ref} "..."`));
+    out.push(c.dim(`  answer with: orchestration answer ${task.ref} "..."`));
   }
 
   if (task.blocked_by.length) {

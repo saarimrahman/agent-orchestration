@@ -2,7 +2,9 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwind from '@tailwindcss/vite';
 
-const host = process.env.ORCH_HOST ?? '127.0.0.1';
+// Current name first, pre-rename name second, matching src/core/env.ts. This
+// config cannot import from src, so the fallback is spelled out here.
+const host = process.env.ORCHESTRATION_HOST ?? process.env.ORCH_HOST ?? '127.0.0.1';
 const exposed = !['127.0.0.1', 'localhost', '::1'].includes(host);
 
 export default defineConfig({
@@ -28,7 +30,7 @@ export default defineConfig({
       // the frontend module `/api.ts` and replaces it with backend HTML, leaving
       // the browser with a titled but completely blank page.
       '^/api/': {
-        target: `http://127.0.0.1:${process.env.ORCH_API_PORT ?? 4477}`,
+        target: `http://127.0.0.1:${process.env.ORCHESTRATION_API_PORT ?? process.env.ORCH_API_PORT ?? 4477}`,
         changeOrigin: true,
       },
     },

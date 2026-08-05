@@ -61,7 +61,7 @@ export function MemoryView({ query, project }: { query: string; project: string 
         <div className="rounded-xl border border-dashed border-ink-800 px-5 py-12 text-center">
           <p className="text-[13px] text-ink-300">No memories here yet.</p>
           <p className="mt-1 text-[12px] text-ink-600">
-            Agents can save one with <code>orch remember &quot;…&quot;</code>.
+            Agents can save one with <code>orchestration remember &quot;…&quot;</code>.
           </p>
         </div>
       ) : (
@@ -88,7 +88,7 @@ export function MemoryView({ query, project }: { query: string; project: string 
               </div>
               <h2 className="mt-2 text-[14px] font-medium text-ink-50">{memory.title}</h2>
               <div
-                className="prose-orch mt-2 text-[12.5px] text-ink-300"
+                className="prose-orchestration mt-2 text-[12.5px] text-ink-300"
                 dangerouslySetInnerHTML={{ __html: renderMarkdown(memory.body) }}
               />
               {(memory.tags.length > 0 || memory.sources.length > 0) && (

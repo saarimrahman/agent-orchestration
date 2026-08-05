@@ -62,7 +62,7 @@ function optionalDate(body: Body, key: string): Date | null | undefined {
   return parseWhenOrThrow(String(raw));
 }
 
-const COOKIE = 'orch_token';
+const COOKIE = 'orchestration_token';
 
 /**
  * Shared-secret gate, used only when the server is reachable off-loopback.
@@ -87,13 +87,17 @@ function tokenGate(token: string) {
       return ctx.redirect(url.pathname + (url.searchParams.size ? `?${url.searchParams}` : ''));
     }
 
-    if (getCookie(ctx, COOKIE) === token || ctx.req.header('x-orch-token') === token) {
+    // The pre-rename header is still accepted so existing scripts polling the
+    // board keep authenticating.
+    const header =
+      ctx.req.header('x-orchestration-token') ?? ctx.req.header('x-orch-token');
+    if (getCookie(ctx, COOKIE) === token || header === token) {
       return next();
     }
 
     return ctx.text(
       'This board needs the access token.\n\n' +
-        'Open the full URL printed by `orch ui`, the one ending in ?t=…\n',
+        'Open the full URL printed by `orchestration ui`, the one ending in ?t=…\n',
       401,
     );
   };
@@ -340,7 +344,7 @@ export function createApp(
     app.get('*', (ctx) =>
       ctx.text(
         'The web UI has not been built yet.\n\n' +
-          'Run "npm run build" once, then "orch ui" again.\n' +
+          'Run "npm run build" once, then "orchestration ui" again.\n' +
           'For UI development run "npm run dev:web" in a second terminal.\n',
         503,
       ),
@@ -397,7 +401,7 @@ export function startServer(db: Db, opts: ServeOptions = {}): Promise<void> {
         );
         console.log('');
       } else {
-        console.log(`orch board  ${url}`);
+        console.log(`orchestration board  ${url}`);
         console.log('press ctrl-c to stop');
       }
 

@@ -1,5 +1,6 @@
 import type { Db } from './db.ts';
 import { nowIso } from './db.ts';
+import { envSetting } from './env.ts';
 import type { Project } from './types.ts';
 
 const PALETTE = [
@@ -46,24 +47,25 @@ export function requireProject(db: Db, key: string): Project {
     `No project "${key}".` +
       (keys.length
         ? ` Existing projects: ${keys.join(', ')}.`
-        : ` Create one with: orch project add ${normalizeKey(key)}`),
+        : ` Create one with: orchestration project add ${normalizeKey(key)}`),
   );
 }
 
 /**
- * The project used when a command omits `-p`. Falls back to $ORCH_PROJECT, then
- * to the only project if exactly one exists.
+ * The project used when a command omits `-p`. Falls back to
+ * $ORCHESTRATION_PROJECT, then to the only project if exactly one exists.
  */
 export function defaultProject(db: Db): Project {
-  if (process.env.ORCH_PROJECT) return requireProject(db, process.env.ORCH_PROJECT);
+  const configured = envSetting('PROJECT');
+  if (configured) return requireProject(db, configured);
   const projects = listProjects(db);
   if (projects.length === 1) return projects[0];
   if (projects.length === 0) {
-    throw new Error('No projects yet. Run: orch init --project <key>');
+    throw new Error('No projects yet. Run: orchestration init --project <key>');
   }
   throw new Error(
     `Several projects exist (${projects.map((p) => p.key).join(', ')}), so -p is required. ` +
-      `Set ORCH_PROJECT to pick a default.`,
+      `Set ORCHESTRATION_PROJECT to pick a default.`,
   );
 }
 

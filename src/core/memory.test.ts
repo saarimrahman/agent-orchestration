@@ -33,7 +33,7 @@ let root: string;
 beforeEach(() => {
   db = openDb(':memory:');
   project = createProject(db, 'demo', 'Demo');
-  root = mkdtempSync(join(tmpdir(), 'orch-memory-'));
+  root = mkdtempSync(join(tmpdir(), 'orchestration-memory-'));
 });
 
 afterEach(() => {

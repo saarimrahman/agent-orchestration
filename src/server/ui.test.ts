@@ -47,7 +47,7 @@ function seed() {
 
 before(async () => {
   const { serve } = await import('@hono/node-server');
-  uiMemoryRoot = mkdtempSync(join(tmpdir(), 'orch-ui-memory-'));
+  uiMemoryRoot = mkdtempSync(join(tmpdir(), 'orchestration-ui-memory-'));
   const db = seed();
   rememberMemory(db, uiMemoryRoot, {
     title: 'Browser memory',
@@ -88,7 +88,7 @@ describe('api', () => {
   test('memory view returns global and every project scope, including archived entries', async () => {
     const db = openDb(':memory:');
     const project = createProject(db, 'docs', 'Docs');
-    const root = mkdtempSync(join(tmpdir(), 'orch-memory-api-'));
+    const root = mkdtempSync(join(tmpdir(), 'orchestration-memory-api-'));
     try {
       const shared = rememberMemory(db, root, {
         title: 'Shared rule',
@@ -276,7 +276,7 @@ describe('access token', () => {
   test('a wrong token is rejected', async () => {
     assert.equal((await hit('/api/state?t=guess')).status, 401);
     assert.equal(
-      (await hit('/api/state', { headers: { 'x-orch-token': 'guess' } })).status,
+      (await hit('/api/state', { headers: { 'x-orchestration-token': 'guess' } })).status,
       401,
     );
   });
@@ -289,12 +289,12 @@ describe('access token', () => {
     assert.ok(!location.includes('sekret'), 'the token must not survive in the redirect target');
 
     const cookie = res.headers.get('set-cookie') ?? '';
-    assert.match(cookie, /orch_token=sekret/);
+    assert.match(cookie, /orchestration_token=sekret/);
     assert.match(cookie, /HttpOnly/, 'the cookie should not be readable from JavaScript');
   });
 
   test('the cookie carries subsequent requests, including the SSE stream', async () => {
-    const headers = { cookie: 'orch_token=sekret' };
+    const headers = { cookie: 'orchestration_token=sekret' };
     assert.equal((await hit('/api/state', { headers })).status, 200);
 
     // EventSource cannot set headers, so cookie auth is what makes live
@@ -306,7 +306,7 @@ describe('access token', () => {
   });
 
   test('a header works for curl and scripts', async () => {
-    const res = await hit('/api/state', { headers: { 'x-orch-token': 'sekret' } });
+    const res = await hit('/api/state', { headers: { 'x-orchestration-token': 'sekret' } });
     assert.equal(res.status, 200);
   });
 

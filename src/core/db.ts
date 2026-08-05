@@ -3,22 +3,30 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
+import { CONFIG_DIRS, envSetting } from './env.ts';
+
 /**
  * Resolution order for the database file:
- *   1. $ORCH_DB
- *   2. `.orch/config.json` -> { "db": "..." }, searched from cwd upwards
- *   3. ~/.orch/orch.db
+ *   1. $ORCHESTRATION_DB, then $ORCH_DB
+ *   2. `.orchestration/config.json` -> { "db": "..." }, searched from cwd
+ *      upwards, then `.orch/config.json` at the same level
+ *   3. ~/.orchestration/orchestration.db
+ *   4. ~/.orch/orch.db, when it already exists
  *
  * The global default is deliberate: this is a hub that agents in many different
- * repos report into, so a per-repo default would fragment the queue.
+ * repos report into, so a per-repo default would fragment the queue. The older
+ * `.orch` spellings are still read so a board created before the rename keeps
+ * resolving without anyone moving files.
  */
 export function resolveDbPath(cwd = process.cwd()): string {
-  if (process.env.ORCH_DB) return resolve(process.env.ORCH_DB);
+  const configured = envSetting('DB');
+  if (configured) return resolve(configured);
 
   let dir = resolve(cwd);
   for (;;) {
-    const cfg = join(dir, '.orch', 'config.json');
-    if (existsSync(cfg)) {
+    for (const name of CONFIG_DIRS) {
+      const cfg = join(dir, name, 'config.json');
+      if (!existsSync(cfg)) continue;
       try {
         const parsed = JSON.parse(readFileSync(cfg, 'utf8'));
         if (typeof parsed.db === 'string' && parsed.db.length > 0) {
@@ -27,7 +35,7 @@ export function resolveDbPath(cwd = process.cwd()): string {
       } catch (err) {
         throw new Error(
           `Could not read ${cfg}: ${(err as Error).message}\n` +
-            `Expected JSON shaped like {"db": "./orch.db"}.`,
+            `Expected JSON shaped like {"db": "./orchestration.db"}.`,
         );
       }
     }
@@ -36,7 +44,10 @@ export function resolveDbPath(cwd = process.cwd()): string {
     dir = parent;
   }
 
-  return join(homedir(), '.orch', 'orch.db');
+  const legacy = join(homedir(), '.orch', 'orch.db');
+  const current = join(homedir(), '.orchestration', 'orchestration.db');
+  if (!existsSync(current) && existsSync(legacy)) return legacy;
+  return current;
 }
 
 const SCHEMA = `
