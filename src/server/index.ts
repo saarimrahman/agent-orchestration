@@ -20,6 +20,7 @@ import {
   claimTask,
   createProject,
   createTask,
+  deleteMemory,
   deleteTask,
   attachTag,
   detachTag,
@@ -174,6 +175,17 @@ export function createApp(
       sources: Array.isArray(body.sources) ? body.sources.map(String) : undefined,
     });
     return ctx.json(updated);
+  });
+
+  app.delete('/api/memories/:id', (ctx) => {
+    const { root, memories } = allMemories();
+    const current = memories.find((memory) => memory.id === ctx.req.param('id'));
+    if (!current) throw new Error(`No memory "${ctx.req.param('id')}".`);
+    const project = current.project_key
+      ? listProjects(db, true).find((item) => item.key === current.project_key) ?? null
+      : null;
+    deleteMemory(db, root, project, current.id);
+    return ctx.json({ deleted: current.id });
   });
 
   app.get('/api/tasks/:ref', (ctx) => {

@@ -118,6 +118,8 @@ export const api = {
   memories: () => request<MemoryDocument[]>('/memories'),
   updateMemory: (id: string, input: Record<string, unknown>) =>
     request<MemoryDocument>(`/memories/${id}`, { method: 'PATCH', body: body(input) }),
+  deleteMemory: (id: string) =>
+    request<{ deleted: string }>(`/memories/${id}`, { method: 'DELETE' }),
   task: (ref: string) => request<TaskDetail>(`/tasks/${ref}`),
   create: (input: Record<string, unknown>) =>
     request<Task>('/tasks', { method: 'POST', body: body(input) }),

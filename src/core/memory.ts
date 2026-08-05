@@ -686,6 +686,24 @@ export function archiveMemory(
   return updateMemory(db, root, project, identifier, { status: 'archived' });
 }
 
+export function deleteMemory(
+  db: Db,
+  root: string,
+  project: Project | null,
+  identifier: string,
+): MemoryDocument {
+  const current = memoryByIdentifier(db, root, project, identifier);
+  const actualProject = current.scope === 'project'
+    ? requireProject(db, current.project_key ?? '')
+    : null;
+
+  unlinkSync(current.path);
+  syncMemoryScope(db, root, actualProject);
+  const memoryIndex = refreshMemoryIndex(root, actualProject);
+  commitMemoryChanges(root, [current.path, memoryIndex], `memory: delete ${current.id}`);
+  return current;
+}
+
 export function reindexMemories(db: Db, root: string, project: Project | null): MemoryDocument[] {
   const global = syncMemoryScope(db, root, null);
   if (existsSync(memoryScopePath(root, null))) refreshMemoryIndex(root, null);

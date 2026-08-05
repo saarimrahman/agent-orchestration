@@ -15,6 +15,7 @@ import { createProject } from './projects.ts';
 import { createTask } from './tasks.ts';
 import {
   archiveMemory,
+  deleteMemory,
   getMemory,
   listMemories,
   memoryContextForTask,
@@ -162,6 +163,21 @@ describe('Markdown memory', () => {
     const archived = getMemory(db, root, project, memory.id);
     assert.equal(archived.status, 'archived');
     assert.deepEqual(archived.sources, ['demo-7#comment-2']);
+  });
+
+  test('deletes the canonical file and records the removal in private history', () => {
+    const memory = rememberMemory(db, root, {
+      project,
+      title: 'Temporary workaround',
+      body: 'Remove this after the migration.',
+    });
+
+    deleteMemory(db, root, project, memory.id);
+
+    assert.equal(existsSync(memory.path), false);
+    assert.throws(() => getMemory(db, root, project, memory.id), /No memory/);
+    assert.doesNotMatch(readFileSync(join(root, 'projects', 'demo', 'MEMORY.md'), 'utf8'), /Temporary workaround/);
+    assert.match(memoryHistory(root), new RegExp(`memory: delete ${memory.id}`));
   });
 
   test('creates private Git history without touching an enclosing repository', () => {

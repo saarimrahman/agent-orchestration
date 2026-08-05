@@ -135,6 +135,16 @@ describe('api', () => {
       assert.equal(updated.status, 'candidate');
       assert.deepEqual(updated.tags, ['git']);
       assert.deepEqual(updated.sources, ['docs-1']);
+
+      const deleted = await app.request(`http://x/api/memories/${shared.id}`, {
+        method: 'DELETE',
+      });
+      assert.equal(deleted.status, 200);
+      assert.deepEqual(await deleted.json(), { deleted: shared.id });
+
+      const afterDelete = await app.request('http://x/api/memories');
+      const remaining = (await afterDelete.json()) as { id: string }[];
+      assert.equal(remaining.some((memory) => memory.id === shared.id), false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -423,12 +433,24 @@ describe('web bundle', () => {
     const memoryText = dom.window.document.getElementById('root')?.textContent ?? '';
     assert.match(memoryText, /Durable memory/);
     assert.match(memoryText, /Browser memory/);
+    assert.doesNotMatch(memoryText, /Visible and editable from the board/);
+    const memoryRow = dom.window.document.querySelector('button[aria-label="View memory: Browser memory"]');
+    assert.ok(memoryRow, 'each compact memory title should open its detail');
+    memoryRow.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /Visible and editable from the board/);
     const editButton = [...dom.window.document.querySelectorAll('button')]
-      .find((button) => button.textContent?.trim() === 'Edit');
-    assert.ok(editButton, 'each memory should offer an edit action');
+      .find((button) => button.textContent?.trim() === 'Edit memory');
+    assert.ok(editButton, 'memory detail should offer an edit action');
     editButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /Edit memory/);
+    const deleteButton = [...dom.window.document.querySelectorAll('button')]
+      .find((button) => button.textContent?.trim() === 'Delete');
+    assert.ok(deleteButton, 'memory editing should offer a delete action');
+    deleteButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /Delete “Browser memory”\?/);
 
     dom.window.close();
   });
