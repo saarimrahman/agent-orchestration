@@ -107,8 +107,17 @@ closing it creates the next occurrence automatically.
 ### Durable memory
 
 `orchestration show <ref>` and `orchestration next --claim` include a small set of active memories
-relevant to the task. When you verify a reusable fact, pitfall, decision, or
-workflow, preserve it with:
+relevant to the task. A memory is durable, reusable knowledge that should improve
+decisions on multiple future tasks. It is not a task log. Keep one-task outcomes,
+dated trial results, current outages or queue state, and other transient evidence
+in task comments or source artifacts instead.
+
+Before writing a memory, search for the idea. Add one only when it is useful
+without the original task context, likely to recur, actionable, and not already
+captured by an existing memory or canonical workflow. Prefer revising or linking
+an existing memory over adding another version. Keep the reusable principle
+concise; record provenance with `--source` and use `--verified` only after
+checking it:
 
 ```
 orchestration remember "UI tests need a production build first" -p demo \
@@ -118,6 +127,11 @@ orchestration remember "UI tests need a production build first" -p demo \
 Use `orchestration memory search "<query>" --json` for explicit recall. Use
 `--candidate` for an unverified learning; candidates stay out of automatic
 task context until `orchestration memory promote <id>`.
+
+At the start of work, identify whether an authoritative workflow or skill applies
+and follow it before improvising a new process. Treat workflows as routing
+anchors, not text to duplicate into many memories. Add only a missing cross-task
+lesson, then link it to the applicable workflow with `applies_to` or `supports`.
 
 Connect related knowledge when the relationship will help retrieval or review:
 
@@ -133,9 +147,11 @@ Use `relates`, `supports`, `contradicts`, `supersedes`, `derived_from`, or
 `--explain` for ranking evidence, and `--semantic` when a local embedding
 provider has been explicitly configured.
 
-Memories are meant to be revised, not just appended to. When one turns out to be
-wrong, incomplete, or superseded, correct it in place rather than writing a
-second memory that contradicts the first:
+Memories are meant to be revised, not just appended to. Archive time-bound or
+task-specific entries once their evidence belongs in the task history. When a
+memory turns out to be wrong, incomplete, duplicated, or superseded, correct the
+canonical entry in place and connect or retire the old one rather than stacking
+overrides:
 
 ```
 orchestration memory edit <id> --body "<corrected text>" --verified

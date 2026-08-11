@@ -146,7 +146,18 @@ leases in one payload — sized to drop straight into a prompt.
 
 Task comments preserve what happened on one piece of work. Durable memory holds
 the facts, decisions, pitfalls, preferences, and playbooks that should carry
-across tasks:
+across tasks. A good memory remains useful without the original task context,
+describes a likely-to-recur and actionable lesson, and has evidence you can cite.
+Named-task outcomes, dated trial results, current platform state, and other
+transient observations belong in task comments or source artifacts.
+
+Search before adding. Prefer editing a canonical memory, linking a supporting
+lesson, or superseding an outdated claim over creating another override. At the
+start of work, identify and follow any applicable authoritative workflow or
+skill. Treat workflows as routing anchors, and save only cross-task lessons that
+the workflow does not already cover.
+
+For example:
 
 ```bash
 orchestration remember "UI tests need a production build first" -p demo \

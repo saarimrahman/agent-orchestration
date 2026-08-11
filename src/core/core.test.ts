@@ -490,6 +490,14 @@ describe('AGENTS.md merge', () => {
     assert.equal(twice.match(/orchestration:begin/g)?.length, 1);
     assert.ok(twice.startsWith('# Project\n\nSome notes.\n'));
   });
+
+  test('keeps memory admission guidance general and workflow-first', () => {
+    const instructions = mergeAgentsFile('');
+
+    assert.match(instructions, /A memory is durable, reusable knowledge/);
+    assert.match(instructions, /identify whether an authoritative workflow or skill applies/);
+    assert.doesNotMatch(instructions, /ML-Bench|SWE-Bench/);
+  });
 });
 
 describe('writes report what actually landed', () => {
