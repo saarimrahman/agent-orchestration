@@ -252,6 +252,67 @@ describe('comments and history', () => {
   });
 });
 
+describe('task search', () => {
+  test('searches refs, tags, and comment text', () => {
+    const byTag = add('Prepare release', { tags: ['customer-api'] });
+    const byComment = add('Investigate incident');
+    addComment(db, byComment.id, 'alice', 'The websocket handshake is failing', 'progress');
+
+    assert.deepEqual(refs(listTasks(db, { search: byTag.ref })), [byTag.ref]);
+    assert.deepEqual(refs(listTasks(db, { search: 'customer-api' })), [byTag.ref]);
+    assert.deepEqual(refs(listTasks(db, { search: 'websocket' })), [byComment.ref]);
+  });
+
+  test('requires every meaningful term but allows terms to match different fields', () => {
+    const fullMatch = add('Repair parser', { tags: ['authentication'] });
+    add('Repair renderer');
+    add('Document authentication');
+
+    assert.deepEqual(refs(listTasks(db, { search: 'repair, authentication!' })), [
+      fullMatch.ref,
+    ]);
+  });
+
+  test('orders search matches by relevance instead of normal queue priority', () => {
+    const bodyMatch = add('Urgent unrelated work', {
+      body: 'Includes the needle in supporting details',
+      priority: 0,
+    });
+    const titleMatch = add('Needle integration', { priority: 3 });
+    const exactTitle = add('Needle', { priority: 3 });
+
+    assert.equal(refs(listTasks(db))[0], bodyMatch.ref, 'non-search listing stays priority ordered');
+    assert.deepEqual(refs(listTasks(db, { search: 'needle' })), [
+      exactTitle.ref,
+      titleMatch.ref,
+      bodyMatch.ref,
+    ]);
+  });
+
+  test('preserves project and closed-task filters during search', () => {
+    createProject(db, 'other', 'Other');
+    const openDemo = add('Shared needle');
+    const closedDemo = add('Archived needle');
+    const other = createTask(db, {
+      title: 'Other needle',
+      project: 'other',
+      actor: 'test',
+    });
+    setStatus(db, closedDemo.id, 'done', 'test');
+
+    assert.deepEqual(refs(listTasks(db, { project: 'demo', search: 'needle' })), [
+      openDemo.ref,
+    ]);
+    assert.deepEqual(
+      new Set(refs(listTasks(db, { project: 'demo', search: 'needle', includeClosed: true }))),
+      new Set([openDemo.ref, closedDemo.ref]),
+    );
+    assert.deepEqual(refs(listTasks(db, { project: 'other', search: 'needle' })), [
+      other.ref,
+    ]);
+  });
+});
+
 describe('waiting on a human', () => {
   test('asking parks the task, drops the lease, and pulls it off the queue', () => {
     const task = add('Ambiguous work');

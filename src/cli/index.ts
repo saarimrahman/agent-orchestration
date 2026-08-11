@@ -23,6 +23,7 @@ import {
   detachTag,
   digest,
   endOfLocalDay,
+  evaluateMemoryRetrieval,
   isValidCron,
   listComments,
   listEvents,
@@ -32,9 +33,13 @@ import {
   listTasks,
   mergeAgentsFile,
   memoryContextForTask,
+  memoryBacklinks,
   memoryDiff,
+  memoryGraph,
   memoryHistory,
   memoryStatus,
+  lintMemories,
+  linkMemory,
   openDb,
   parseDuration,
   parseWhenOrThrow,
@@ -50,6 +55,7 @@ import {
   resolveMemoryPath,
   rememberMemory,
   searchMemories,
+  unlinkMemory,
   getMemory,
   updateMemory,
   archiveMemory,
@@ -59,11 +65,17 @@ import {
   updateTask,
   STATUSES,
   MEMORY_KINDS,
+  MEMORY_RELATION_TYPES,
   MEMORY_STATUSES,
+  MEMORY_TARGET_TYPES,
   type Db,
   type MemoryKind,
+  type MemoryRelationType,
+  type MemorySearchOptions,
   type MemoryStatus,
+  type MemoryTargetType,
   type Project,
+  type RetrievalGoldenCase,
   type Status,
   type TaskView,
 } from '../core/index.ts';
@@ -74,7 +86,13 @@ import {
   describeEvent,
   json,
   memoryContextText,
+  memoryBacklinkTable,
   memoryDetail,
+  memoryEvaluationText,
+  memoryGraphText,
+  memoryLintText,
+  memorySuggestions,
+  memorySearchTable,
   memoryTable,
   taskDetail,
   taskTable,
@@ -98,7 +116,7 @@ Waiting on a human
 
 Tasks
   add "<title>"             Create a task
-  ls [text]                 List open tasks; a text argument searches title and body
+  ls [text]                 List open tasks; search refs, titles, bodies, tags, comments
   show <ref>                Full detail, comments, and history
   edit <ref>                Change title, body, priority, due date, project…
   comment <ref> "<text>"    Leave a note (--progress marks it an agent update)
@@ -115,8 +133,16 @@ Structure
 Memory (stored outside the repo in ~/.orchestration/memory)
   remember "<learning>"     Save a durable project memory
   memory ls|search|show     Find and inspect memories
+  memory search <query> [--kind K] [--status S] [--tag T] [--source S]
+                     [--verified] [--semantic] [--graph-depth 0-3] [--explain]
   memory edit <id> [--title|--body|--kind|--status|--tag|--verified]
   memory promote|archive <id>
+  memory link|unlink <id> <target> [--relation relates] [--target-type memory]
+  memory backlinks <target> [--target-type memory]
+  memory graph [id] [--depth 2] [--limit 200]
+  memory lint             Audit aliases, links, targets, and supersession
+  memory suggest-links <id> [--limit 5]
+  memory evaluate <golden.json> [--k N]
   memory diff|history|status|commit
   memory reindex            Rebuild the SQLite index from Markdown
   context <task-ref>        Show bounded memory relevant to a task
@@ -567,6 +593,131 @@ function parsedMemoryStatus(p: Parsed): MemoryStatus | undefined {
   return raw as MemoryStatus;
 }
 
+function parsedMemoryKinds(p: Parsed): MemoryKind[] | undefined {
+  const kinds = list(p, 'kind');
+  for (const kind of kinds) {
+    if (!MEMORY_KINDS.includes(kind as MemoryKind)) {
+      throw new CliError(`Unknown memory kind "${kind}". Valid: ${MEMORY_KINDS.join(', ')}.`);
+    }
+  }
+  return kinds.length ? kinds as MemoryKind[] : undefined;
+}
+
+function parsedMemoryStatuses(p: Parsed): MemoryStatus[] | undefined {
+  const statuses = list(p, 'status');
+  for (const status of statuses) {
+    if (!MEMORY_STATUSES.includes(status as MemoryStatus)) {
+      throw new CliError(`Unknown memory status "${status}". Valid: ${MEMORY_STATUSES.join(', ')}.`);
+    }
+  }
+  return statuses.length ? statuses as MemoryStatus[] : undefined;
+}
+
+function parsedGraphDepth(p: Parsed): number | undefined {
+  const depth = num(p, 'graph-depth');
+  if (depth === undefined) return undefined;
+  if (!Number.isInteger(depth) || depth < 0 || depth > 3) {
+    throw new CliError(`--graph-depth needs an integer from 0 to 3. Got "${depth}".`);
+  }
+  return depth;
+}
+
+function memorySearchOptions(p: Parsed): MemorySearchOptions {
+  return {
+    all: bool(p, 'all'),
+    limit: num(p, 'limit'),
+    kind: parsedMemoryKinds(p),
+    status: parsedMemoryStatuses(p),
+    tag: list(p, 'tag').length ? list(p, 'tag') : undefined,
+    source: list(p, 'source').length ? list(p, 'source') : undefined,
+    verified: bool(p, 'verified') ? true : undefined,
+    semantic: bool(p, 'semantic'),
+    graphDepth: parsedGraphDepth(p),
+  };
+}
+
+async function runMemorySearch(
+  db: Db,
+  root: string,
+  project: Project | null,
+  query: string,
+  options: MemorySearchOptions,
+) {
+  return options.semantic
+    ? await searchMemories(db, root, project, query, { ...options, semantic: true })
+    : searchMemories(db, root, project, query, { ...options, semantic: false });
+}
+
+function parsedMemoryRelation(p: Parsed): MemoryRelationType {
+  const raw = str(p, 'relation');
+  if (present(p, 'relation') && !raw) {
+    throw new CliError(`--relation needs one of: ${MEMORY_RELATION_TYPES.join(', ')}.`);
+  }
+  const relation = raw ?? 'relates';
+  if (!MEMORY_RELATION_TYPES.includes(relation as MemoryRelationType)) {
+    throw new CliError(`Unknown memory relation "${relation}". Valid: ${MEMORY_RELATION_TYPES.join(', ')}.`);
+  }
+  return relation as MemoryRelationType;
+}
+
+function parsedMemoryTargetType(p: Parsed): MemoryTargetType {
+  const raw = str(p, 'target-type');
+  if (present(p, 'target-type') && !raw) {
+    throw new CliError(`--target-type needs one of: ${MEMORY_TARGET_TYPES.join(', ')}.`);
+  }
+  const targetType = raw ?? 'memory';
+  if (!MEMORY_TARGET_TYPES.includes(targetType as MemoryTargetType)) {
+    throw new CliError(`Unknown memory target type "${targetType}". Valid: ${MEMORY_TARGET_TYPES.join(', ')}.`);
+  }
+  return targetType as MemoryTargetType;
+}
+
+function retrievalGolden(path: string): { cases: RetrievalGoldenCase[]; k?: number } {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch (err) {
+    throw new CliError(`Could not read retrieval golden file ${path}: ${(err as Error).message}`);
+  }
+  const envelope = Array.isArray(decoded)
+    ? { cases: decoded, k: undefined }
+    : decoded !== null && typeof decoded === 'object'
+      ? decoded as { cases?: unknown; k?: unknown }
+      : null;
+  if (!envelope || !Array.isArray(envelope.cases)) {
+    throw new CliError('Retrieval golden JSON must be an array of cases or an object shaped as {"cases":[...],"k":3}.');
+  }
+  if (!envelope.cases.length) throw new CliError('Retrieval golden JSON needs at least one case.');
+  const cases = envelope.cases.map((candidate, index): RetrievalGoldenCase => {
+    if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw new CliError(`Retrieval golden case ${index + 1} must be an object.`);
+    }
+    const value = candidate as Record<string, unknown>;
+    if (typeof value.query !== 'string' || !value.query.trim()) {
+      throw new CliError(`Retrieval golden case ${index + 1} needs a non-empty "query".`);
+    }
+    if (!Array.isArray(value.relevant) || !value.relevant.length ||
+        !value.relevant.every((item) => typeof item === 'string' && item.trim())) {
+      throw new CliError(`Retrieval golden case ${index + 1} needs a non-empty string array in "relevant".`);
+    }
+    if (value.options !== undefined &&
+        (value.options === null || typeof value.options !== 'object' || Array.isArray(value.options))) {
+      throw new CliError(`Retrieval golden case ${index + 1} "options" must be an object.`);
+    }
+    return {
+      name: typeof value.name === 'string' ? value.name : undefined,
+      query: value.query.trim(),
+      relevant: (value.relevant as string[]).map((item) => item.trim()),
+      options: value.options as RetrievalGoldenCase['options'],
+    };
+  });
+  const k = envelope.k;
+  if (k !== undefined && (typeof k !== 'number' || !Number.isInteger(k) || k < 1)) {
+    throw new CliError('Retrieval golden file "k" must be a positive integer.');
+  }
+  return { cases, k: k === undefined ? undefined : Number(k) };
+}
+
 function cmdRemember(db: Db, p: Parsed, positionalStart = 0): void {
   const body = str(p, 'body') ?? str(p, 'message') ?? p.positional.slice(positionalStart).join(' ');
   if (!body.trim()) {
@@ -590,7 +741,7 @@ function cmdRemember(db: Db, p: Parsed, positionalStart = 0): void {
   out(p, memory, () => `${c.dim('remembered')} ${c.bold(memory.id.slice(0, 12))}  ${memory.title}\n${c.dim(memory.path)}`);
 }
 
-function cmdMemory(db: Db, p: Parsed): void {
+async function cmdMemory(db: Db, p: Parsed): Promise<void> {
   const [action = 'ls', identifier] = p.positional;
   const root = resolveMemoryPath();
 
@@ -633,11 +784,8 @@ function cmdMemory(db: Db, p: Parsed): void {
   }
   if (action === 'search' || action === 'find') {
     const query = str(p, 'search') ?? p.positional.slice(1).join(' ');
-    const memories = searchMemories(db, root, project, query, {
-      all: bool(p, 'all'),
-      limit: num(p, 'limit'),
-    });
-    out(p, memories, () => memoryTable(memories));
+    const memories = await runMemorySearch(db, root, project, query, memorySearchOptions(p));
+    out(p, memories, () => memorySearchTable(memories, bool(p, 'explain')));
     return;
   }
   if (action === 'reindex' || action === 'sync') {
@@ -645,8 +793,71 @@ function cmdMemory(db: Db, p: Parsed): void {
     out(p, { root, indexed: memories.length }, () => `Indexed ${memories.length} memories from ${root}`);
     return;
   }
+  if (action === 'lint') {
+    const issues = lintMemories(db, root, project);
+    out(p, issues, () => memoryLintText(issues));
+    return;
+  }
+  if (action === 'graph') {
+    const graph = memoryGraph(db, root, project, identifier, {
+      depth: num(p, 'depth'),
+      limit: num(p, 'limit'),
+    });
+    out(p, graph, () => memoryGraphText(graph));
+    return;
+  }
+  if (action === 'backlinks') {
+    if (!identifier) throw new CliError('Usage: orchestration memory backlinks <target> [--target-type memory]');
+    const targetType = parsedMemoryTargetType(p);
+    const backlinks = memoryBacklinks(db, root, project, targetType, identifier);
+    out(p, { target_type: targetType, target: identifier, backlinks }, () => memoryBacklinkTable(backlinks));
+    return;
+  }
+  if (action === 'evaluate' || action === 'eval') {
+    if (!identifier) throw new CliError('Usage: orchestration memory evaluate <golden.json> [--k N]');
+    const golden = retrievalGolden(identifier);
+    const overrideK = num(p, 'k');
+    if (present(p, 'k') && overrideK === undefined) throw new CliError('--k needs a positive integer.');
+    const requestedK = overrideK ?? golden.k;
+    if (requestedK !== undefined && (!Number.isInteger(requestedK) || requestedK < 1)) {
+      throw new CliError(`--k needs a positive integer. Got "${requestedK}".`);
+    }
+    const evaluation = await evaluateMemoryRetrieval(db, root, project, golden.cases, { k: requestedK });
+    out(p, evaluation, () => memoryEvaluationText(evaluation));
+    return;
+  }
   if (!identifier) throw new CliError(`Usage: orchestration memory ${action} <id>`);
   const memory = getMemory(db, root, project, identifier);
+
+  if (action === 'link' || action === 'unlink') {
+    const target = p.positional[2];
+    if (!target) {
+      throw new CliError(`Usage: orchestration memory ${action} <id> <target> [--relation relates] [--target-type memory]`);
+    }
+    const relation = {
+      type: parsedMemoryRelation(p),
+      target_type: parsedMemoryTargetType(p),
+      target,
+    };
+    const updated = action === 'link'
+      ? linkMemory(db, root, project, memory.id, relation)
+      : unlinkMemory(db, root, project, memory.id, relation);
+    out(p, updated, () => memoryDetail(updated));
+    return;
+  }
+  if (action === 'suggest-links' || action === 'suggest') {
+    const existingTargets = new Set(memory.relations
+      .filter((relation) => relation.target_type === 'memory')
+      .map((relation) => relation.target));
+    const wanted = Math.max(1, num(p, 'limit') ?? 5);
+    const query = [memory.title, ...memory.aliases, ...memory.tags].join(' ');
+    const suggestions = (await runMemorySearch(db, root, project, query, {
+      ...memorySearchOptions(p),
+      limit: Math.max(wanted * 3, 10),
+    })).filter((candidate) => candidate.id !== memory.id && !existingTargets.has(candidate.id)).slice(0, wanted);
+    out(p, { source_id: memory.id, suggestions }, () => memorySuggestions(memory, suggestions, bool(p, 'explain')));
+    return;
+  }
 
   if (action === 'show' || action === 'view') {
     out(p, memory, () => memoryDetail(memory));
@@ -696,7 +907,7 @@ function cmdMemory(db: Db, p: Parsed): void {
     return;
   }
 
-  throw new CliError(`Unknown memory action "${action}". Use ls, search, show, edit, promote, archive, diff, history, status, commit, or reindex.`);
+  throw new CliError(`Unknown memory action "${action}". Use ls, search, show, edit, promote, archive, link, unlink, backlinks, graph, lint, suggest-links, evaluate, diff, history, status, commit, or reindex.`);
 }
 
 function cmdContext(db: Db, p: Parsed): void {
@@ -853,7 +1064,7 @@ export async function main(argv: string[]): Promise<number> {
       }
       case 'project': case 'projects': cmdProject(db, p); return 0;
       case 'remember': cmdRemember(db, p); return 0;
-      case 'memory': case 'memories': cmdMemory(db, p); return 0;
+      case 'memory': case 'memories': await cmdMemory(db, p); return 0;
       case 'context': cmdContext(db, p); return 0;
       case 'digest': cmdDigest(db, p); return 0;
       case 'feed': case 'activity': cmdFeed(db, p); return 0;

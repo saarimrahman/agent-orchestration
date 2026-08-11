@@ -30,6 +30,12 @@ import {
   listProjects,
   listTags,
   listTasks,
+  lintMemories,
+  linkMemory,
+  memoryBacklinks,
+  memoryGraph,
+  MEMORY_KINDS,
+  MEMORY_STATUSES,
   parseWhenOrThrow,
   readyTasks,
   recentEvents,
@@ -37,13 +43,21 @@ import {
   removeDep,
   requireTask,
   resolveMemoryPath,
+  searchMemories,
   setStatus,
   staleLeases,
   updateMemory,
+  unlinkMemory,
   updateTask,
   type Db,
   type MemoryKind,
+  type MemoryDocument,
+  type MemoryRelation,
+  type MemoryRelationType,
+  type MemorySearchOptions,
+  type MemorySearchResult,
   type MemoryStatus,
+  type MemoryTargetType,
   type Status,
 } from '../core/index.ts';
 
@@ -135,6 +149,61 @@ export function createApp(
     };
   };
 
+  const memoryProject = (memory: MemoryDocument) => memory.project_key
+    ? listProjects(db, true).find((item) => item.key === memory.project_key) ?? null
+    : null;
+
+  const findMemory = (identifier: string) => {
+    const { root, memories } = allMemories();
+    const memory = memories.find((item) => item.id === identifier || item.aliases.includes(identifier));
+    if (!memory) throw new Error(`No memory "${identifier}".`);
+    return { root, memory, project: memoryProject(memory) };
+  };
+
+  const relationBody = (body: Body): MemoryRelation => ({
+    type: String(body.type ?? '') as MemoryRelationType,
+    target_type: String(body.target_type ?? '') as MemoryTargetType,
+    target: String(body.target ?? ''),
+  });
+
+  const requestedProject = (key?: string) => {
+    if (!key) return undefined;
+    const project = listProjects(db, true).find((item) => item.key === key);
+    if (!project) throw new Error(`Unknown project "${key}".`);
+    return project;
+  };
+
+  const queryNumber = (value: string | undefined, fallback: number): number => {
+    if (value === undefined) return fallback;
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`Expected a non-negative integer, got "${value}".`);
+    return parsed;
+  };
+
+  const searchedMemories = async (
+    query: string,
+    projectKey: string | undefined,
+    searchOptions: MemorySearchOptions,
+  ) => {
+    const root = options.memoryRoot ?? resolveMemoryPath();
+    const project = requestedProject(projectKey);
+    const scopes = project ? [project] : [null, ...listProjects(db, true)];
+    const results = new Map<string, { memory: MemorySearchResult; rank: number }>();
+    for (const scope of scopes) {
+      const matches = searchOptions.semantic
+        ? await searchMemories(db, root, scope, query, { ...searchOptions, semantic: true })
+        : searchMemories(db, root, scope, query, { ...searchOptions, semantic: false });
+      for (const [rank, memory] of matches.entries()) {
+        const previous = results.get(memory.id);
+        if (!previous || rank < previous.rank) results.set(memory.id, { memory, rank });
+      }
+    }
+    return [...results.values()]
+      .sort((a, b) => a.rank - b.rank || b.memory.updated_at.localeCompare(a.memory.updated_at))
+      .map(({ memory }) => memory)
+      .slice(0, searchOptions.limit ?? 100);
+  };
+
   /** Everything the board needs for a first paint, in one round trip. */
   app.get('/api/state', (ctx) => {
     const includeClosed = ctx.req.query('closed') === '1';
@@ -158,13 +227,103 @@ export function createApp(
     return ctx.json(allMemories().memories);
   });
 
+  /** Ranked FTS search. Filters remain client-side so changing them needs no round trip. */
+  app.get('/api/memories/search', async (ctx) => {
+    const query = ctx.req.query('q') ?? '';
+    const limit = queryNumber(ctx.req.query('limit'), 100);
+    const csv = (name: string) => (ctx.req.query(name) ?? '')
+      .split(',').map((value) => value.trim()).filter(Boolean);
+    const kinds = csv('kind');
+    const statuses = csv('status');
+    for (const kind of kinds) {
+      if (!MEMORY_KINDS.includes(kind as MemoryKind)) throw new Error(`Unknown memory kind "${kind}".`);
+    }
+    for (const status of statuses) {
+      if (!MEMORY_STATUSES.includes(status as MemoryStatus)) throw new Error(`Unknown memory status "${status}".`);
+    }
+    const graphDepth = queryNumber(ctx.req.query('graph_depth'), 0);
+    if (graphDepth > 3) throw new Error('graph_depth must be between 0 and 3.');
+    const searchOptions: MemorySearchOptions = {
+      all: ctx.req.query('all') === '1',
+      limit,
+      kind: kinds.length ? kinds as MemoryKind[] : undefined,
+      status: statuses.length ? statuses as MemoryStatus[] : undefined,
+      tag: csv('tag'),
+      source: csv('source'),
+      verified: ctx.req.query('verified') === '1' ? true : undefined,
+      semantic: ctx.req.query('semantic') === '1',
+      graphDepth,
+    };
+    return ctx.json(await searchedMemories(query, ctx.req.query('project'), searchOptions));
+  });
+
+  app.get('/api/memories/lint', (ctx) => {
+    const root = options.memoryRoot ?? resolveMemoryPath();
+    const project = requestedProject(ctx.req.query('project'));
+    if (project) return ctx.json(lintMemories(db, root, project));
+    const issues = [null, ...listProjects(db, true)].flatMap((scope) => lintMemories(db, root, scope));
+    return ctx.json([...new Map(issues.map((issue) => [
+      `${issue.memory_id}:${issue.code}:${JSON.stringify(issue.relation ?? null)}`,
+      issue,
+    ])).values()]);
+  });
+
+  app.get('/api/memories/graph', (ctx) => {
+    const identifier = ctx.req.query('id');
+    const depth = queryNumber(ctx.req.query('depth'), 2);
+    const limit = Math.max(1, queryNumber(ctx.req.query('limit'), 200));
+    if (identifier) {
+      const { root, memory, project } = findMemory(identifier);
+      return ctx.json(memoryGraph(db, root, project, memory.id, { depth, limit }));
+    }
+    const root = options.memoryRoot ?? resolveMemoryPath();
+    const project = requestedProject(ctx.req.query('project'));
+    if (project) return ctx.json(memoryGraph(db, root, project, undefined, { depth, limit }));
+    const graphs = [null, ...listProjects(db, true)].map((scope) =>
+      memoryGraph(db, root, scope, undefined, { depth, limit }),
+    );
+    const memories = new Map(graphs.flatMap((graph) => graph.memories).map((memory) => [memory.id, memory]));
+    const relations = new Map(graphs.flatMap((graph) => graph.relations).map((relation) => [
+      `${relation.source_id}:${relation.type}:${relation.target_type}:${relation.target}`,
+      relation,
+    ]));
+    const limitedMemories = [...memories.values()].slice(0, limit);
+    const included = new Set(limitedMemories.map((memory) => memory.id));
+    return ctx.json({
+      memories: limitedMemories,
+      relations: [...relations.values()].filter((relation) => included.has(relation.source_id)),
+      truncated: memories.size > limit || graphs.some((graph) => graph.truncated),
+    });
+  });
+
+  app.get('/api/memories/:id/connections', (ctx) => {
+    const { root, memory, project } = findMemory(ctx.req.param('id'));
+    const backlinks = memoryBacklinks(db, root, project, 'memory', memory.id);
+    return ctx.json({ memory, outgoing: memory.relations, backlinks });
+  });
+
+  app.get('/api/memories/:id/backlinks', (ctx) => {
+    const { root, memory, project } = findMemory(ctx.req.param('id'));
+    return ctx.json(memoryBacklinks(db, root, project, 'memory', memory.id));
+  });
+
+  app.post('/api/memories/:id/relations', async (ctx) => {
+    const { root, memory, project } = findMemory(ctx.req.param('id'));
+    const relation = relationBody((await ctx.req.json()) as Body);
+    return ctx.json(linkMemory(db, root, project, memory.id, relation));
+  });
+
+  app.delete('/api/memories/:id/relations', async (ctx) => {
+    const { root, memory, project } = findMemory(ctx.req.param('id'));
+    const relation = relationBody((await ctx.req.json()) as Body);
+    return ctx.json(unlinkMemory(db, root, project, memory.id, relation));
+  });
+
   app.patch('/api/memories/:id', async (ctx) => {
     const { root, memories } = allMemories();
     const current = memories.find((memory) => memory.id === ctx.req.param('id'));
     if (!current) throw new Error(`No memory "${ctx.req.param('id')}".`);
-    const project = current.project_key
-      ? listProjects(db, true).find((item) => item.key === current.project_key) ?? null
-      : null;
+    const project = memoryProject(current);
     const body = (await ctx.req.json()) as Body;
     const updated = updateMemory(db, root, project, current.id, {
       title: typeof body.title === 'string' ? body.title : undefined,
@@ -181,9 +340,7 @@ export function createApp(
     const { root, memories } = allMemories();
     const current = memories.find((memory) => memory.id === ctx.req.param('id'));
     if (!current) throw new Error(`No memory "${ctx.req.param('id')}".`);
-    const project = current.project_key
-      ? listProjects(db, true).find((item) => item.key === current.project_key) ?? null
-      : null;
+    const project = memoryProject(current);
     deleteMemory(db, root, project, current.id);
     return ctx.json({ deleted: current.id });
   });

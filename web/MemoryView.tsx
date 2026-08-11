@@ -6,19 +6,31 @@ import {
   ChevronRight,
   FileText,
   Lightbulb,
+  Link2,
   ListFilter,
+  Network,
   Pencil,
+  Plus,
   RotateCcw,
   Save,
   ShieldAlert,
   Sparkles,
   Trash2,
+  Unlink,
   X,
   type LucideIcon,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
-import { api, type MemoryDocument } from './api.ts';
+import {
+  api,
+  type MemoryConnections,
+  type MemoryDocument,
+  type MemoryGraph,
+  type MemoryRelation,
+  type MemoryRelationType,
+  type MemoryTargetType,
+} from './api.ts';
 import { Badge } from './components/ui/badge.tsx';
 import { Button } from './components/ui/button.tsx';
 import { cn } from './lib/utils.ts';
@@ -35,6 +47,8 @@ const KIND_ICON: Record<MemoryDocument['kind'], LucideIcon> = {
 
 const KINDS = ['fact', 'decision', 'pitfall', 'playbook', 'preference', 'note'] as const;
 const STATUSES = ['candidate', 'active', 'superseded', 'archived'] as const;
+const RELATION_TYPES = ['relates', 'supports', 'contradicts', 'supersedes', 'derived_from', 'applies_to'] as const;
+const TARGET_TYPES = ['memory', 'task', 'comment', 'file', 'url'] as const;
 type MemorySort = 'updated-desc' | 'updated-asc' | 'title-asc' | 'title-desc' | 'kind' | 'status' | 'project' | 'tag';
 
 const filterField =
@@ -86,13 +100,27 @@ export function MemoryView({ query, project }: { query: string; project: string 
   const [kindFilter, setKindFilter] = useState<MemoryDocument['kind'] | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<MemoryDocument['status'] | 'all'>('all');
   const [scopeFilter, setScopeFilter] = useState<MemoryDocument['scope'] | 'all'>('all');
+  const [verifiedOnly, setVerifiedOnly] = useState(false);
+  const [semanticSearch, setSemanticSearch] = useState(false);
+  const [graphDepth, setGraphDepth] = useState(0);
   const [sort, setSort] = useState<MemorySort>('updated-desc');
 
   useEffect(() => {
     let alive = true;
-    void api.memories().then(
+    void api.memories(query, project, {
+      all: true,
+      kind: kindFilter === 'all' ? undefined : kindFilter,
+      status: statusFilter === 'all' ? undefined : statusFilter,
+      tag: tagFilter === 'all' ? undefined : tagFilter,
+      verified: verifiedOnly,
+      semantic: semanticSearch,
+      graphDepth,
+    }).then(
       (next) => {
-        if (alive) setMemories(next);
+        if (alive) {
+          setMemories(next);
+          setError(null);
+        }
       },
       (err: Error) => {
         if (alive) setError(err.message);
@@ -101,7 +129,7 @@ export function MemoryView({ query, project }: { query: string; project: string 
     return () => {
       alive = false;
     };
-  }, []);
+  }, [graphDepth, kindFilter, project, query, semanticSearch, statusFilter, tagFilter, verifiedOnly]);
 
   const scopedMemories = useMemo(
     () => memories?.filter((memory) => !project || memory.project_key === project) ?? [],
@@ -115,29 +143,23 @@ export function MemoryView({ query, project }: { query: string; project: string 
   );
 
   useEffect(() => {
-    if (tagFilter !== 'all' && !availableTags.includes(tagFilter)) setTagFilter('all');
-  }, [availableTags, tagFilter]);
+    if (!query.trim() && tagFilter !== 'all' && !availableTags.includes(tagFilter)) setTagFilter('all');
+  }, [availableTags, query, tagFilter]);
 
   const shown = useMemo(() => {
     if (!memories) return [];
-    const needle = query.trim().toLowerCase();
+    const rankedSearch = Boolean(query.trim());
     const filtered = memories.filter((memory) => {
       if (project && memory.project_key !== project) return false;
       if (tagFilter !== 'all' && !memory.tags.includes(tagFilter)) return false;
       if (kindFilter !== 'all' && memory.kind !== kindFilter) return false;
       if (statusFilter !== 'all' && memory.status !== statusFilter) return false;
       if (scopeFilter !== 'all' && memory.scope !== scopeFilter) return false;
-      if (needle && ![
-          memory.title,
-          memory.body,
-          memory.kind,
-          memory.status,
-          memory.project_key ?? 'global',
-          ...memory.tags,
-          ...memory.sources,
-        ].some((value) => value.toLowerCase().includes(needle))) return false;
+      if (verifiedOnly && !memory.last_verified_at) return false;
       return true;
     });
+
+    if (rankedSearch) return filtered;
 
     const byTitle = (a: MemoryDocument, b: MemoryDocument) =>
       a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
@@ -153,14 +175,15 @@ export function MemoryView({ query, project }: { query: string; project: string 
         default: return b.updated_at.localeCompare(a.updated_at) || byTitle(a, b);
       }
     });
-  }, [kindFilter, memories, project, query, scopeFilter, sort, statusFilter, tagFilter]);
+  }, [kindFilter, memories, project, query, scopeFilter, sort, statusFilter, tagFilter, verifiedOnly]);
 
-  const hasFilters = tagFilter !== 'all' || kindFilter !== 'all' || statusFilter !== 'all' || scopeFilter !== 'all';
+  const hasFilters = tagFilter !== 'all' || kindFilter !== 'all' || statusFilter !== 'all' || scopeFilter !== 'all' || verifiedOnly;
   const clearFilters = () => {
     setTagFilter('all');
     setKindFilter('all');
     setStatusFilter('all');
     setScopeFilter('all');
+    setVerifiedOnly(false);
   };
 
   const askToDelete = (memory: MemoryDocument) => {
@@ -234,6 +257,39 @@ export function MemoryView({ query, project }: { query: string; project: string 
           <option value="global">Global</option>
           <option value="project">Project</option>
         </select>
+        <label className="flex h-8 items-center gap-1.5 px-1 text-[10.5px] text-ink-500">
+          <input
+            type="checkbox"
+            checked={verifiedOnly}
+            onChange={(event) => setVerifiedOnly(event.target.checked)}
+            aria-label="Show verified memories only"
+          />
+          Verified
+        </label>
+        {query.trim() && (
+          <>
+            <label className="flex h-8 items-center gap-1.5 px-1 text-[10.5px] text-ink-500">
+              <input
+                type="checkbox"
+                checked={semanticSearch}
+                onChange={(event) => setSemanticSearch(event.target.checked)}
+                aria-label="Use semantic memory search"
+              />
+              Semantic
+            </label>
+            <select
+              value={graphDepth}
+              onChange={(event) => setGraphDepth(Number(event.target.value))}
+              aria-label="Memory search graph depth"
+              className={filterField}
+            >
+              <option value={0}>No graph expansion</option>
+              <option value={1}>1 graph hop</option>
+              <option value={2}>2 graph hops</option>
+              <option value={3}>3 graph hops</option>
+            </select>
+          </>
+        )}
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters} className="h-8 px-2 text-[11px]">
             <RotateCcw /> Clear
@@ -243,11 +299,13 @@ export function MemoryView({ query, project }: { query: string; project: string 
           <ArrowUpDown className="size-3.5" /> Sort
         </span>
         <select
-          value={sort}
+          value={query.trim() ? 'relevance' : sort}
           onChange={(event) => setSort(event.target.value as MemorySort)}
           aria-label="Sort memories"
           className={filterField}
+          disabled={Boolean(query.trim())}
         >
+          {query.trim() && <option value="relevance">Relevance</option>}
           <option value="updated-desc">Recently updated</option>
           <option value="updated-asc">Least recently updated</option>
           <option value="title-asc">Title A–Z</option>
@@ -289,6 +347,12 @@ export function MemoryView({ query, project }: { query: string; project: string 
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[12.5px] font-semibold tracking-[-0.005em] text-ink-50">{memory.title}</span>
                   <MemoryMetadata memory={memory} className="mt-1.5" />
+                  {query.trim() && memory.snippet && (
+                    <span className="mt-2 block line-clamp-2 text-[10px] leading-relaxed text-ink-600">{memory.snippet.replaceAll('[', '').replaceAll(']', '')}</span>
+                  )}
+                  {query.trim() && memory.explanation && (
+                    <span className="mt-1 block truncate text-[9px] text-ink-700">{memory.explanation}</span>
+                  )}
                 </span>
                 <ChevronRight className="mt-2 size-4 shrink-0 text-ink-700 transition-transform group-hover:translate-x-0.5 group-hover:text-ink-400" />
               </button>
@@ -306,6 +370,11 @@ export function MemoryView({ query, project }: { query: string; project: string 
             setSelected(null);
           }}
           onDelete={() => askToDelete(selected)}
+          onNavigate={(memory) => setSelected(memory)}
+          onUpdated={(updated) => {
+            setMemories((current) => current?.map((memory) => memory.id === updated.id ? updated : memory) ?? null);
+            setSelected(updated);
+          }}
         />
       )}
 
@@ -340,13 +409,75 @@ function MemoryDetail({
   onClose,
   onEdit,
   onDelete,
+  onUpdated,
+  onNavigate,
 }: {
   memory: MemoryDocument;
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onUpdated: (memory: MemoryDocument) => void;
+  onNavigate: (memory: MemoryDocument) => void;
 }) {
   const KindIcon = KIND_ICON[memory.kind];
+  const [connections, setConnections] = useState<MemoryConnections | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [relationType, setRelationType] = useState<MemoryRelationType>('relates');
+  const [targetType, setTargetType] = useState<MemoryTargetType>('memory');
+  const [target, setTarget] = useState('');
+  const [connectionBusy, setConnectionBusy] = useState(false);
+  const [showGraph, setShowGraph] = useState(false);
+  const [graph, setGraph] = useState<MemoryGraph | null>(null);
+  const [graphError, setGraphError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setConnections(null);
+    setConnectionError(null);
+    setShowGraph(false);
+    setGraph(null);
+    setGraphError(null);
+    void api.memoryConnections(memory.id).then(
+      (next) => { if (alive) setConnections(next); },
+      (err: Error) => { if (alive) setConnectionError(err.message); },
+    );
+    return () => { alive = false; };
+  }, [memory.id]);
+
+  const toggleGraph = async () => {
+    if (showGraph) {
+      setShowGraph(false);
+      return;
+    }
+    setShowGraph(true);
+    if (graph) return;
+    setGraphError(null);
+    try {
+      setGraph(await api.memoryGraph(memory.id, 2, 16));
+    } catch (err) {
+      setGraphError((err as Error).message);
+    }
+  };
+
+  const mutateRelation = async (relation: MemoryRelation, remove = false) => {
+    if (connectionBusy) return;
+    setConnectionBusy(true);
+    setConnectionError(null);
+    try {
+      const updated = remove
+        ? await api.unlinkMemory(memory.id, relation)
+        : await api.linkMemory(memory.id, relation);
+      onUpdated(updated);
+      setConnections(await api.memoryConnections(updated.id));
+      if (showGraph) setGraph(await api.memoryGraph(updated.id, 2, 16));
+      else setGraph(null);
+      if (!remove) setTarget('');
+    } catch (err) {
+      setConnectionError((err as Error).message);
+    } finally {
+      setConnectionBusy(false);
+    }
+  };
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
@@ -386,6 +517,110 @@ function MemoryDetail({
               {memory.sources.map((source) => <span key={source}>source:{source}</span>)}
             </div>
           )}
+
+          <section data-memory-connections className="mt-5 border-t border-white/[.055] pt-4">
+            <div className="flex items-center gap-2">
+              <Link2 className="size-3.5 text-accent-soft" />
+              <h3 className="text-[11px] font-semibold text-ink-200">Connections</h3>
+              {connections && (
+                <span className="text-[9.5px] text-ink-650">
+                  {connections.outgoing.length} outgoing · {connections.backlinks.length} incoming
+                </span>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void toggleGraph()}
+                aria-label={showGraph ? 'Hide memory graph' : 'Show memory graph'}
+                className="ml-auto h-7 px-2 text-[10px]"
+              >
+                <Network /> {showGraph ? 'Hide graph' : 'Show graph'}
+              </Button>
+            </div>
+
+            {showGraph && (
+              <div className="mt-3">
+                {!graph && !graphError && <p className="text-[10px] text-ink-650">Loading graph…</p>}
+                {graph && <MemoryGraphPanel graph={graph} selectedId={memory.id} onSelect={onNavigate} />}
+                {graphError && <p className="rounded-lg border border-p0/20 bg-p0/[.08] px-3 py-2 text-[10.5px] text-p0">Could not load graph: {graphError}</p>}
+              </div>
+            )}
+
+            {!connections && !connectionError && <p className="mt-2 text-[10px] text-ink-650">Loading connections…</p>}
+
+            {(connections?.outgoing ?? memory.relations).length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                <p className="text-[9px] font-medium uppercase tracking-[.12em] text-ink-650">Outgoing</p>
+                {(connections?.outgoing ?? memory.relations).map((relation) => (
+                  <div
+                    key={`${relation.type}:${relation.target_type}:${relation.target}`}
+                    className="flex items-center gap-2 rounded-lg border border-white/[.05] bg-black/10 px-2.5 py-2 text-[10.5px]"
+                  >
+                    <Badge>{relation.type}</Badge>
+                    <span className="text-ink-600">{relation.target_type}</span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-ink-300">{relation.target}</span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Remove ${relation.type} link to ${relation.target}`}
+                      disabled={connectionBusy}
+                      onClick={() => void mutateRelation(relation, true)}
+                      className="size-7 text-ink-600 hover:text-p0"
+                    >
+                      <Unlink />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {connections && connections.backlinks.length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                <p className="text-[9px] font-medium uppercase tracking-[.12em] text-ink-650">Backlinks</p>
+                {connections.backlinks.map((backlink) => (
+                  <div key={`${backlink.source_id}:${backlink.type}`} className="rounded-lg border border-white/[.05] bg-black/10 px-2.5 py-2 text-[10.5px] text-ink-400">
+                    <span className="font-medium text-ink-200">{backlink.source.title}</span>
+                    <span className="mx-1.5 text-ink-700">·</span>
+                    <span>{backlink.type}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_2fr_auto]">
+              <select
+                value={relationType}
+                onChange={(event) => setRelationType(event.target.value as MemoryRelationType)}
+                className={field}
+                aria-label="Memory relation type"
+              >
+                {RELATION_TYPES.map((value) => <option key={value}>{value}</option>)}
+              </select>
+              <select
+                value={targetType}
+                onChange={(event) => setTargetType(event.target.value as MemoryTargetType)}
+                className={field}
+                aria-label="Memory relation target type"
+              >
+                {TARGET_TYPES.map((value) => <option key={value}>{value}</option>)}
+              </select>
+              <input
+                value={target}
+                onChange={(event) => setTarget(event.target.value)}
+                placeholder="Target id, ref, path, or URL"
+                className={field}
+                aria-label="Memory relation target"
+              />
+              <Button
+                size="sm"
+                disabled={!target.trim() || connectionBusy}
+                onClick={() => void mutateRelation({ type: relationType, target_type: targetType, target: target.trim() })}
+              >
+                <Plus /> Add
+              </Button>
+            </div>
+            {connectionError && <p className="mt-2 rounded-lg border border-p0/20 bg-p0/[.08] px-3 py-2 text-[10.5px] text-p0">{connectionError}</p>}
+          </section>
         </div>
 
         <footer className="flex items-center gap-2 border-t border-white/[.055] bg-black/10 px-5 py-3.5">
@@ -394,6 +629,99 @@ function MemoryDetail({
           <Button size="sm" onClick={onEdit}><Pencil /> Edit memory</Button>
         </footer>
       </div>
+    </div>
+  );
+}
+
+function MemoryGraphPanel({
+  graph,
+  selectedId,
+  onSelect,
+}: {
+  graph: MemoryGraph;
+  selectedId: string;
+  onSelect: (memory: MemoryDocument) => void;
+}) {
+  const memories = graph.memories.slice(0, 16);
+  if (!memories.length) {
+    return <p className="rounded-lg border border-dashed border-white/[.07] px-3 py-5 text-center text-[10px] text-ink-650">No graph nodes found.</p>;
+  }
+  const width = 640;
+  const height = 250;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const center = memories.find((memory) => memory.id === selectedId) ?? memories[0];
+  const others = memories.filter((memory) => memory.id !== center.id);
+  const positions = new Map<string, { x: number; y: number }>([[center.id, { x: centerX, y: centerY }]]);
+  others.forEach((memory, index) => {
+    const angle = (Math.PI * 2 * index / Math.max(others.length, 1)) - Math.PI / 2;
+    positions.set(memory.id, {
+      x: centerX + Math.cos(angle) * 235,
+      y: centerY + Math.sin(angle) * 88,
+    });
+  });
+  const targetIds = new Map(memories.flatMap((memory) =>
+    [memory.id, ...memory.aliases].map((identifier) => [identifier, memory.id] as const),
+  ));
+  const edges = graph.relations.flatMap((relation) => {
+    const targetId = relation.target_type === 'memory' ? targetIds.get(relation.target) : undefined;
+    return targetId && positions.has(relation.source_id) && positions.has(targetId)
+      ? [{ relation, targetId }]
+      : [];
+  });
+  if (!edges.length) {
+    return <p className="rounded-lg border border-dashed border-white/[.07] px-3 py-5 text-center text-[10px] text-ink-650">No connected memories yet.</p>;
+  }
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-white/[.06] bg-ink-950/50 p-2">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="h-auto min-h-48 w-full"
+        role="img"
+        aria-label="Memory relationship graph"
+      >
+        {edges.map(({ relation, targetId }) => {
+          const from = positions.get(relation.source_id)!;
+          const to = positions.get(targetId)!;
+          return (
+            <g key={`${relation.source_id}:${relation.type}:${relation.target}`}>
+              <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="rgba(148,163,184,.28)" strokeWidth="1.5" />
+              <text x={(from.x + to.x) / 2} y={(from.y + to.y) / 2 - 4} textAnchor="middle" fill="rgba(148,163,184,.72)" fontSize="9">{relation.type}</text>
+            </g>
+          );
+        })}
+        {memories.map((item) => {
+          const position = positions.get(item.id)!;
+          const selected = item.id === selectedId;
+          const label = item.title.length > 24 ? `${item.title.slice(0, 23)}…` : item.title;
+          return (
+            <g
+              key={item.id}
+              role="button"
+              tabIndex={0}
+              aria-label={`Open memory: ${item.title}`}
+              onClick={() => onSelect(item)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') onSelect(item);
+              }}
+              className="cursor-pointer outline-none"
+            >
+              <rect
+                x={position.x - 72}
+                y={position.y - 18}
+                width="144"
+                height="36"
+                rx="10"
+                fill={selected ? 'rgba(124,140,255,.24)' : 'rgba(24,31,48,.96)'}
+                stroke={selected ? 'rgba(124,140,255,.72)' : 'rgba(148,163,184,.22)'}
+              />
+              <text x={position.x} y={position.y + 3} textAnchor="middle" fill={selected ? '#c7d2fe' : '#cbd5e1'} fontSize="10.5" fontWeight="600">{label}</text>
+            </g>
+          );
+        })}
+      </svg>
+      {graph.truncated && <p className="px-1 pb-1 text-[9px] text-ink-650">Showing the nearest 16 memories.</p>}
     </div>
   );
 }

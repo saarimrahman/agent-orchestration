@@ -184,8 +184,47 @@ CREATE TRIGGER memory_documents_au AFTER UPDATE ON memory_documents BEGIN
 END;
 `;
 
+const MEMORY_RELATIONS_SCHEMA = `
+ALTER TABLE memory_documents ADD COLUMN aliases TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE memory_documents ADD COLUMN relations TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE memory_documents ADD COLUMN extra_frontmatter TEXT NOT NULL DEFAULT '{}';
+
+CREATE TABLE memory_relations (
+  source_id   TEXT NOT NULL REFERENCES memory_documents(id) ON DELETE CASCADE,
+  relation    TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target      TEXT NOT NULL,
+  PRIMARY KEY (source_id, relation, target_type, target)
+);
+
+CREATE INDEX idx_memory_relations_source
+  ON memory_relations(source_id);
+CREATE INDEX idx_memory_relations_target
+  ON memory_relations(target_type, target);
+`;
+
+const MEMORY_EMBEDDINGS_SCHEMA = `
+CREATE TABLE memory_embeddings (
+  memory_id   TEXT NOT NULL,
+  provider    TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  vector      TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  PRIMARY KEY (memory_id, provider, content_hash)
+);
+
+CREATE INDEX idx_memory_embeddings_provider
+  ON memory_embeddings(provider, content_hash);
+`;
+
 /** Ordered list of migrations. Index + 1 is the resulting `user_version`. */
-const MIGRATIONS: string[] = [SCHEMA, MEMORY_SCHEMA];
+const MIGRATIONS: string[] = [
+  SCHEMA,
+  MEMORY_SCHEMA,
+  MEMORY_RELATIONS_SCHEMA,
+  MEMORY_EMBEDDINGS_SCHEMA,
+];
 
 export type Db = DatabaseSync;
 

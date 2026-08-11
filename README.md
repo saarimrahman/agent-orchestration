@@ -3,12 +3,9 @@
 A local to-do list that coding agents can read, claim, and report progress to —
 with a board you can actually look at.
 
-**Agents working on this repository:** start with
-[AGENT_START_HERE.md](AGENT_START_HERE.md). It covers the CLI lifecycle,
-parallel subagent work, iteration, assumptions, escalation, and verification.
-
 One SQLite file. A CLI for agents. A web UI for you. Nothing runs in the
-background, nothing phones home, nothing launches processes on your behalf.
+background or phones home, and it never starts agent workers. Semantic memory
+search can run a local embedding command that you explicitly configure.
 
 ```
 agents / you  ──►  orchestration CLI ──┐
@@ -18,12 +15,12 @@ browser  ──►  orchestration ui ────────┘
 
 ## Why it works this way
 
-Agents **pull**. `orchestration` is a passive store: it never spawns an agent, never
-supervises a process, never opens a worktree. An agent asks for work, takes it,
-reports back, and closes it. That single decision is why the whole thing is a
-few files instead of a distributed system, and why it composes with whatever you
-already use to run agents — Claude Code's `/loop`, Routines, system cron, or you
-typing at a terminal.
+Agents **pull**. `orchestration` is a passive store: it never spawns or
+supervises an agent and never opens a worktree. An agent asks for work, takes
+it, reports back, and closes it. That single decision is why the whole thing is
+a few files instead of a distributed system, and why it composes with whatever
+you already use to run agents — Claude Code's `/loop`, Routines, system cron,
+or you typing at a terminal.
 
 The design borrows the parts that have proven out elsewhere: the ready-queue and
 atomic-claim primitives from [beads](https://github.com/steveyegge/beads), the
@@ -31,6 +28,16 @@ generated-agent-instructions idea from
 [Backlog.md](https://github.com/MrLesk/Backlog.md), and a deliberately small
 command surface, because a large tool catalog measurably degrades how well
 models pick the right call.
+
+The generated instructions also give the owning agent a compact delivery-lead
+contract: frame an evidence-based outcome, delegate bounded independent work,
+integrate it, try to falsify the result, and launch another wave only when new
+evidence justifies one. The emphasis is on observable roles and artifacts rather
+than elaborate personas. This draws on structured collaboration in
+[MetaGPT](https://arxiv.org/abs/2308.00352), iterative feedback in
+[Self-Refine](https://arxiv.org/abs/2303.17651), reflective verification in
+[Reflexion](https://arxiv.org/abs/2303.11366), and multi-agent failure analysis
+in [MAST](https://arxiv.org/abs/2503.13657).
 
 ## Install
 
@@ -60,7 +67,9 @@ orchestration ui                         # open the board
 ## The agent loop
 
 This is what `orchestration init` writes into `AGENTS.md` and a Claude Code skill, so
-agents in the repo pick it up without you explaining it each session.
+agents in the repo pick it up without you explaining it each session. The
+workflow text has one source of truth in `src/core/instructions.ts`; this
+repository's authoritative agent-facing copy is `AGENTS.md`.
 
 ```bash
 orchestration next --claim --agent alice        # take the top unblocked task, atomically
@@ -148,6 +157,12 @@ orchestration memory show mem-a1b2c3d4
 orchestration memory edit mem-a1b2c3d4        # prints the Markdown path
 orchestration memory diff mem-a1b2c3d4
 orchestration memory history mem-a1b2c3d4
+
+orchestration memory link mem-new mem-old --relation supersedes
+orchestration memory backlinks mem-old
+orchestration memory graph mem-new --depth 2
+orchestration memory lint
+orchestration memory evaluate retrieval-golden.json --k 3
 ```
 
 Markdown is canonical. By default it lives under `~/.orchestration/memory`, completely
@@ -157,11 +172,57 @@ commits writes made through the CLI, giving memories diffs and rollback without
 ever committing or pushing them to the project repository. Direct file edits
 remain visible in `orchestration memory diff`; use `orchestration memory commit` to save them.
 
-SQLite FTS5 supplies a rebuildable full-text index. `orchestration memory reindex`
-rescans the files, and ordinary searches also notice direct edits. Active
-matches are added, with a small context budget, to `orchestration show` and `orchestration next
---claim`. Save uncertain information with `--candidate`; it is excluded from
-automatic recall until `orchestration memory promote <id>`.
+Canonical frontmatter carries stable aliases and typed links. Memory and file
+links are also rendered as Obsidian-compatible `[[wikilinks]]`, while SQLite
+derives a normalized relation index for fast backlinks, graph traversal, and
+linting. Link types are `relates`, `supports`, `contradicts`, `supersedes`,
+`derived_from`, and `applies_to`; targets may be a memory, task, comment, file,
+or URL. Use `supersedes` when a new active memory replaces an old one: the
+operation retires the target and prevents cycles. Use `contradicts` when both
+claims should remain active and visible as a conflict.
+
+The connected-memory model takes inspiration from
+[A-MEM](https://arxiv.org/abs/2502.12110),
+[HippoRAG](https://arxiv.org/abs/2405.14831), and Microsoft
+[GraphRAG](https://microsoft.github.io/graphrag/), while this implementation
+stays deliberately local: canonical Markdown plus a derived SQLite index.
+
+SQLite FTS5 supplies a rebuildable full-text index. Search runs phrase, all-term
+`AND`, prefix, and broad `OR` retrieval, then fuses those rankings and favors
+verified, sourced, recent, exact-tag matches. Filters cover kind, status, tag,
+source, and verification; `--graph-depth 1` can add memories connected to a
+strong match. Use `--explain` to print why each result ranked, or `--json` for
+the full reasons. Superseded hits redirect to their active replacements, while
+contradicting active memories remain visible together.
+
+To measure retrieval changes, run
+`orchestration memory evaluate <golden.json> --k 3`. The file may be a case
+array or an envelope whose `k` is overridden by `--k`:
+
+```json
+{
+  "k": 3,
+  "cases": [
+    {
+      "name": "release checklist",
+      "query": "how do we verify a release?",
+      "relevant": ["mem-a1b2c3d4"],
+      "options": { "kind": "playbook", "graphDepth": 1 }
+    }
+  ]
+}
+```
+
+Each case requires `query` and one or more relevant memory IDs or aliases.
+Optional `options` are the same search options used by the retrieval API. Text
+output summarizes recall@k, MRR, stale-hit rate, and context precision; `--json`
+also includes every case and its retrieved IDs.
+
+`orchestration memory reindex` rescans the files, and ordinary searches also
+notice direct edits. Active matches are added, with a small context budget, to
+`orchestration show` and `orchestration next --claim`. Save uncertain
+information with `--candidate`; it is excluded from automatic recall until
+`orchestration memory promote <id>`.
 
 Each scope has a `MEMORY.md` index. Text you add outside its managed index block
 is pinned guidance; detailed topic files are retrieved only when relevant.
@@ -181,7 +242,7 @@ secrets in them.
 | `orchestration inbox` | Everything waiting on you |
 | `orchestration add "<title>"` | Create — `-p` project, `-P` priority, `--due`, `--tag`, `--dep`, `--recur` |
 | `orchestration ls` | List — `--status`, `--tag`, `--project`, `--assignee`, `--due today`, `--all` |
-| `orchestration ls "<text>"` | Full-text over title and body; combine with any filter or `--all` |
+| `orchestration ls "<text>"` | Ranked search over ref, title, body, tags, and comments; combine with any filter or `--all` |
 | `orchestration show <ref>` | Detail, comments, history, and relevant durable memory |
 | `orchestration edit <ref>` | Change any field |
 | `orchestration comment <ref> "<text>"` | Note, or `--progress` for an agent update |
@@ -191,9 +252,17 @@ secrets in them.
 | `orchestration tag add\|rm <ref> <tag>` / `orchestration tags` | Tags |
 | `orchestration project add\|ls\|archive <key>` | Projects |
 | `orchestration remember "<learning>"` | Save a project memory; `--global` saves a global one |
-| `orchestration memory ls\|search\|show` | Browse the local Markdown memory store |
+| `orchestration memory ls\|show` | Browse or inspect the local Markdown memory store |
+| `orchestration memory search "<query>" [--kind K] [--status S] [--tag T] [--source S] [--verified]` | Ranked, filterable retrieval; add `--explain`, `--graph-depth 0-3`, or `--semantic` |
 | `orchestration memory edit <id>` | Revise in place — `--title`, `--body`, `--kind`, `--status`, `--tag`, `--verified`; no flags prints the Markdown path |
 | `orchestration memory promote\|archive <id>` | Promote a candidate, or retire one that is no longer true |
+| `orchestration memory link <source-id> <target> [--relation <type>] [--target-type <type>]` | Add a typed relation; defaults to `relates` and a memory target |
+| `orchestration memory unlink <source-id> <target> [--relation <type>] [--target-type <type>]` | Remove the matching typed relation |
+| `orchestration memory backlinks <target> [--target-type <type>]` | Find incoming links through the derived SQLite index |
+| `orchestration memory graph [id] [--depth 2] [--limit 200]` | Inspect the whole graph or a bounded bidirectional neighborhood |
+| `orchestration memory lint` | Audit aliases, targets, links, and supersession cycles |
+| `orchestration memory suggest-links <id> [--limit 5] [--all]` | Rank possible memory links without changing the source |
+| `orchestration memory evaluate <golden.json> [--k 3]` | Score golden retrieval cases with recall@k, MRR, stale-hit rate, and context precision |
 | `orchestration memory diff\|history\|status\|commit` | Inspect or save private memory history |
 | `orchestration memory reindex` | Rebuild full-text search from Markdown |
 | `orchestration context <ref>` | Relevant memory for one task, with a bounded result count |
@@ -290,6 +359,15 @@ Durable Markdown memory lives at `~/.orchestration/memory` by default. Override 
 `$ORCHESTRATION_MEMORY_DIR`, or add `"memory": "<path>"` to `.orchestration/config.json`. This
 path is its own private Git repository and has no remote by default.
 
+Semantic memory retrieval is optional and local. When using
+`orchestration memory search "<query>" --semantic`, set
+`$ORCHESTRATION_EMBEDDING_COMMAND` (or legacy `$ORCH_EMBEDDING_COMMAND`) to a
+JSON argv array such as `["python3","./embed.py"]`. Orchestration invokes it
+directly without a shell, writes `{"texts":["…"]}` to stdin, and accepts either
+a vector matrix or `{"vectors": <matrix>}` on stdout. Semantic rankings are
+fused with lexical results and cached by content hash. Orchestration provides no
+default model, network service, or command when this setting is absent.
+
 `$ORCH_PROJECT` sets the default project when you omit `-p`. `$ORCH_ACTOR` sets
 who you are in the activity log when you omit `--agent`.
 
@@ -309,6 +387,7 @@ catches render crashes without needing a browser.
 
 ## Not included
 
-No agent spawning, worktrees, or log capture. No MCP server — the CLI covers the
-same ground at zero context cost, and the core layer is a thin wrapper away if
-that changes. No accounts, multi-user permissions, or sync.
+No built-in agent runner, worktrees, or log capture. No bundled embedding model
+or network embedding service. No MCP server — the CLI covers the same ground at
+zero context cost, and the core layer is a thin wrapper away if that changes.
+No accounts, multi-user permissions, or sync.

@@ -12,6 +12,7 @@ import {
   claimTask,
   createProject,
   createTask,
+  linkMemory,
   openDb,
   rememberMemory,
 } from '../core/index.ts';
@@ -49,19 +50,24 @@ before(async () => {
   const { serve } = await import('@hono/node-server');
   uiMemoryRoot = mkdtempSync(join(tmpdir(), 'orchestration-ui-memory-'));
   const db = seed();
-  rememberMemory(db, uiMemoryRoot, {
+  const browserMemory = rememberMemory(db, uiMemoryRoot, {
     title: 'Browser memory',
     body: 'Visible and editable from the board.',
     tags: ['browser', 'ui'],
     project: null,
   });
-  rememberMemory(db, uiMemoryRoot, {
+  const alphaMemory = rememberMemory(db, uiMemoryRoot, {
     title: 'Alpha memory',
     body: 'A second memory for browsing controls.',
     kind: 'fact',
     status: 'candidate',
     tags: ['docs'],
     project: null,
+  });
+  linkMemory(db, uiMemoryRoot, null, browserMemory.id, {
+    type: 'relates',
+    target_type: 'memory',
+    target: alphaMemory.id,
   });
   const app = createApp(db, { memoryRoot: uiMemoryRoot });
   await new Promise<void>((resolve) => {
@@ -154,6 +160,105 @@ describe('api', () => {
       const afterDelete = await app.request('http://x/api/memories');
       const remaining = (await afterDelete.json()) as { id: string }[];
       assert.equal(remaining.some((memory) => memory.id === shared.id), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('memory search and connection endpoints expose and mutate the graph', async () => {
+    const db = openDb(':memory:');
+    const root = mkdtempSync(join(tmpdir(), 'orchestration-memory-connections-api-'));
+    try {
+      const source = rememberMemory(db, root, {
+        title: 'Deployment checklist',
+        body: 'Verify the connected release before deployment.',
+        kind: 'playbook',
+        tags: ['release'],
+        sources: ['runbook'],
+        lastVerifiedAt: new Date().toISOString(),
+        project: null,
+      });
+      const target = rememberMemory(db, root, {
+        title: 'Release verification',
+        body: 'Connected releases require a smoke test.',
+        project: null,
+      });
+      const app = createApp(db, { memoryRoot: root });
+
+      const searched = await app.request('http://x/api/memories/search?q=connected');
+      assert.equal(searched.status, 200);
+      const results = await searched.json() as {
+        id: string;
+        score: number;
+        reasons: string[];
+        explanation: string;
+      }[];
+      assert.deepEqual(new Set(results.map((memory) => memory.id)), new Set([source.id, target.id]));
+      assert.equal(typeof results[0].score, 'number');
+      assert.ok(results[0].reasons.length > 0);
+      assert.equal(typeof results[0].explanation, 'string');
+
+      const filtered = await app.request(
+        'http://x/api/memories/search?q=connected&kind=playbook&tag=release&source=runbook&verified=1',
+      );
+      assert.deepEqual((await filtered.json() as { id: string }[]).map((memory) => memory.id), [source.id]);
+
+      const priorEmbeddingCommand = process.env.ORCHESTRATION_EMBEDDING_COMMAND;
+      const embeddingScript = 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const n=JSON.parse(s).texts.length;console.log(JSON.stringify({vectors:Array.from({length:n},()=>[1,0])}))})';
+      process.env.ORCHESTRATION_EMBEDDING_COMMAND = JSON.stringify([process.execPath, '-e', embeddingScript]);
+      try {
+        const semantic = await app.request('http://x/api/memories/search?q=safe%20release&semantic=1&limit=1');
+        assert.equal(semantic.status, 200);
+        assert.equal((await semantic.json() as unknown[]).length, 1);
+      } finally {
+        if (priorEmbeddingCommand === undefined) delete process.env.ORCHESTRATION_EMBEDDING_COMMAND;
+        else process.env.ORCHESTRATION_EMBEDDING_COMMAND = priorEmbeddingCommand;
+      }
+
+      const relation = { type: 'supports', target_type: 'memory', target: target.id };
+      const linked = await app.request(`http://x/api/memories/${source.id}/relations`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(relation),
+      });
+      assert.equal(linked.status, 200);
+      assert.deepEqual((await linked.json() as { relations: unknown[] }).relations, [relation]);
+
+      const connections = await app.request(`http://x/api/memories/${source.id}/connections`);
+      const detail = await connections.json() as {
+        outgoing: (typeof relation)[];
+        backlinks: unknown[];
+      };
+      assert.deepEqual(detail.outgoing, [relation]);
+      assert.deepEqual(detail.backlinks, []);
+
+      const backlinks = await app.request(`http://x/api/memories/${target.id}/backlinks`);
+      const incoming = await backlinks.json() as { source_id: string; type: string }[];
+      assert.deepEqual(incoming.map((edge) => [edge.source_id, edge.type]), [[source.id, 'supports']]);
+
+      const graph = await app.request(`http://x/api/memories/graph?id=${source.id}&depth=1`);
+      const neighborhood = await graph.json() as { memories: { id: string }[]; relations: unknown[] };
+      assert.deepEqual(new Set(neighborhood.memories.map((memory) => memory.id)), new Set([source.id, target.id]));
+      assert.equal(neighborhood.relations.length, 1);
+
+      const linted = await app.request('http://x/api/memories/lint');
+      assert.deepEqual(await linted.json(), []);
+
+      const unlinked = await app.request(`http://x/api/memories/${source.id}/relations`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(relation),
+      });
+      assert.equal(unlinked.status, 200);
+      assert.deepEqual((await unlinked.json() as { relations: unknown[] }).relations, []);
+
+      const invalid = await app.request(`http://x/api/memories/${source.id}/relations`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...relation, type: 'invented' }),
+      });
+      assert.equal(invalid.status, 400);
+      assert.match((await invalid.json() as { error: string }).error, /Unknown memory relation/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -466,6 +571,20 @@ describe('web bundle', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(rows()[0]?.getAttribute('aria-label'), 'View memory: Alpha memory');
 
+    const memorySearch = dom.window.document.querySelector('input[placeholder="Search project memory…"]') as HTMLInputElement;
+    const setInputValue = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
+    setInputValue.call(memorySearch, 'second');
+    memorySearch.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.deepEqual(rows().map((row) => row.getAttribute('aria-label')), ['View memory: Alpha memory']);
+    const relevanceSort = dom.window.document.querySelector('select[aria-label="Sort memories"]') as HTMLSelectElement;
+    assert.equal(relevanceSort.value, 'relevance');
+    assert.equal(relevanceSort.disabled, true);
+
+    setInputValue.call(memorySearch, '');
+    memorySearch.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
     const tagSelect = dom.window.document.querySelector('select[aria-label="Filter memories by tag"]') as HTMLSelectElement;
     tagSelect.value = 'ui';
     tagSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
@@ -475,8 +594,22 @@ describe('web bundle', () => {
     memoryRow = dom.window.document.querySelector('button[aria-label="View memory: Browser memory"]');
     assert.ok(memoryRow);
     memoryRow.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 100));
     assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /Visible and editable from the board/);
+    assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /Connections/);
+    assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /relates/);
+    assert.ok(dom.window.document.querySelector('select[aria-label="Memory relation type"]'));
+    assert.ok(dom.window.document.querySelector('select[aria-label="Memory relation target type"]'));
+    assert.ok(dom.window.document.querySelector('input[aria-label="Memory relation target"]'));
+    assert.ok(dom.window.document.querySelector('button[aria-label^="Remove relates link"]'));
+    const showGraph = dom.window.document.querySelector('button[aria-label="Show memory graph"]');
+    assert.ok(showGraph);
+    showGraph.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const graph = dom.window.document.querySelector('svg[aria-label="Memory relationship graph"]');
+    assert.ok(graph, 'the memory detail should render a bounded relationship graph on demand');
+    assert.equal(graph.querySelectorAll('line').length, 1);
+    assert.ok(graph.querySelector('[aria-label="Open memory: Alpha memory"]'));
     const editButton = [...dom.window.document.querySelectorAll('button')]
       .find((button) => button.textContent?.trim() === 'Edit memory');
     assert.ok(editButton, 'memory detail should offer an edit action');

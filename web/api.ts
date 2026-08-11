@@ -82,12 +82,14 @@ export type TaskDetail = Task & { comments: Comment[]; events: Event[] };
 
 export type MemoryDocument = {
   id: string;
+  project_id: number | null;
   project_key: string | null;
   scope: 'global' | 'project';
   kind: 'fact' | 'decision' | 'pitfall' | 'playbook' | 'preference' | 'note';
   status: 'candidate' | 'active' | 'superseded' | 'archived';
   title: string;
   path: string;
+  aliases: string[];
   tags: string[];
   sources: string[];
   author: string | null;
@@ -96,7 +98,66 @@ export type MemoryDocument = {
   updated_at: string;
   last_verified_at: string | null;
   review_after: string | null;
+  relations: MemoryRelation[];
   supersedes: string | null;
+  extra_frontmatter: Record<string, unknown>;
+  content_hash: string;
+  score?: number;
+  snippet?: string;
+  reasons?: string[];
+  explanation?: string;
+};
+
+export type MemoryRelationType =
+  | 'relates'
+  | 'supports'
+  | 'contradicts'
+  | 'supersedes'
+  | 'derived_from'
+  | 'applies_to';
+
+export type MemoryTargetType = 'memory' | 'task' | 'comment' | 'file' | 'url';
+
+export type MemoryRelation = {
+  type: MemoryRelationType;
+  target_type: MemoryTargetType;
+  target: string;
+};
+
+export type MemoryBacklink = MemoryRelation & {
+  source_id: string;
+  source: MemoryDocument;
+};
+
+export type MemoryConnections = {
+  memory: MemoryDocument;
+  outgoing: MemoryRelation[];
+  backlinks: MemoryBacklink[];
+};
+
+export type MemoryGraph = {
+  memories: MemoryDocument[];
+  relations: (MemoryRelation & { source_id: string })[];
+  truncated: boolean;
+};
+
+export type MemoryLintIssue = {
+  severity: 'error' | 'warning';
+  code: string;
+  message: string;
+  memory_id: string;
+  relation?: MemoryRelation;
+};
+
+export type MemorySearchOptions = {
+  all?: boolean;
+  kind?: MemoryDocument['kind'];
+  status?: MemoryDocument['status'];
+  tag?: string;
+  source?: string;
+  verified?: boolean;
+  semantic?: boolean;
+  graphDepth?: number;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -115,7 +176,39 @@ const body = (value: unknown) => JSON.stringify(value);
 
 export const api = {
   state: () => request<State>('/state'),
-  memories: () => request<MemoryDocument[]>('/memories'),
+  memories: (query = '', project?: string | null, options: MemorySearchOptions = {}) => {
+    const normalized = query.trim();
+    if (!normalized) return request<MemoryDocument[]>('/memories');
+    const params = new URLSearchParams({ q: normalized });
+    if (project) params.set('project', project);
+    if (options.all) params.set('all', '1');
+    if (options.kind) params.set('kind', options.kind);
+    if (options.status) params.set('status', options.status);
+    if (options.tag) params.set('tag', options.tag);
+    if (options.source) params.set('source', options.source);
+    if (options.verified) params.set('verified', '1');
+    if (options.semantic) params.set('semantic', '1');
+    if (options.graphDepth) params.set('graph_depth', String(options.graphDepth));
+    return request<MemoryDocument[]>(`/memories/search?${params}`);
+  },
+  memoryConnections: (id: string) =>
+    request<MemoryConnections>(`/memories/${encodeURIComponent(id)}/connections`),
+  memoryBacklinks: (id: string) =>
+    request<MemoryBacklink[]>(`/memories/${encodeURIComponent(id)}/backlinks`),
+  memoryGraph: (id?: string, depth = 2, limit = 16) => {
+    const params = new URLSearchParams({ depth: String(depth), limit: String(limit) });
+    if (id) params.set('id', id);
+    return request<MemoryGraph>(`/memories/graph?${params}`);
+  },
+  memoryLint: () => request<MemoryLintIssue[]>('/memories/lint'),
+  linkMemory: (id: string, relation: MemoryRelation) =>
+    request<MemoryDocument>(`/memories/${encodeURIComponent(id)}/relations`, {
+      method: 'POST', body: body(relation),
+    }),
+  unlinkMemory: (id: string, relation: MemoryRelation) =>
+    request<MemoryDocument>(`/memories/${encodeURIComponent(id)}/relations`, {
+      method: 'DELETE', body: body(relation),
+    }),
   updateMemory: (id: string, input: Record<string, unknown>) =>
     request<MemoryDocument>(`/memories/${id}`, { method: 'PATCH', body: body(input) }),
   deleteMemory: (id: string) =>

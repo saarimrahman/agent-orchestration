@@ -533,9 +533,20 @@ export type ListFilter = {
   limit?: number;
 };
 
+/**
+ * Turn free-form search text into distinct terms that are safe to use as
+ * literal SQLite values. Keeping hyphens makes task refs such as `demo-12` a
+ * single term; surrounding punctuation is deliberately ignored.
+ */
+function taskSearchTerms(search: string): string[] {
+  const matches = search.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}_-]*/gu) ?? [];
+  return [...new Set(matches)];
+}
+
 export function listTasks(db: Db, filter: ListFilter = {}): TaskView[] {
   const clauses: string[] = [];
   const params: unknown[] = [];
+  const terms = filter.search ? taskSearchTerms(filter.search) : [];
 
   if (filter.project) {
     clauses.push('t.project_id = ?');
@@ -560,14 +571,66 @@ export function listTasks(db: Db, filter: ListFilter = {}): TaskView[] {
     clauses.push('t.due_at IS NOT NULL AND t.due_at <= ?');
     params.push(filter.dueBefore);
   }
-  if (filter.search) {
-    clauses.push('(t.title LIKE ? OR t.body LIKE ?)');
-    params.push(`%${filter.search}%`, `%${filter.search}%`);
+  if (terms.length) {
+    // AND across terms, OR across fields. A query such as "parser auth" may
+    // therefore match one term in the title and the other in a comment, while
+    // a task that mentions only one of them is excluded.
+    clauses.push(`NOT EXISTS (
+      SELECT 1 FROM search_terms st
+      WHERE instr(lower(t.ref), st.term) = 0
+        AND instr(lower(t.title), st.term) = 0
+        AND instr(lower(t.body), st.term) = 0
+        AND NOT EXISTS (
+          SELECT 1 FROM task_tags search_tt JOIN tags search_tg ON search_tg.id = search_tt.tag_id
+          WHERE search_tt.task_id = t.id AND instr(lower(search_tg.name), st.term) > 0
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM comments search_c
+          WHERE search_c.task_id = t.id AND instr(lower(search_c.body), st.term) > 0
+        )
+    )`);
   }
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-  params.push(nowIso());
-  let sql = `${SELECT_VIEW} ${where} ${QUEUE_ORDER}`;
+  let sql: string;
+  if (terms.length) {
+    const values = terms.map(() => '(?)').join(',');
+    const phrase = filter.search!.trim().toLowerCase();
+    params.unshift(...terms);
+    params.push(phrase, phrase, phrase, nowIso());
+    sql = `WITH search_terms(term) AS (VALUES ${values})
+      ${SELECT_VIEW} ${where}
+      ORDER BY
+        CASE WHEN lower(t.ref) = ? THEN 1000 ELSE 0 END
+        + CASE WHEN lower(t.title) = ? THEN 500
+               WHEN instr(lower(t.title), ?) = 1 THEN 250 ELSE 0 END
+        + (SELECT COALESCE(SUM(
+            CASE WHEN lower(t.ref) = st.term THEN 200
+                 WHEN instr(lower(t.ref), st.term) > 0 THEN 100 ELSE 0 END
+            + CASE WHEN lower(t.title) = st.term THEN 120
+                   WHEN instr(lower(t.title), st.term) > 0 THEN 60 ELSE 0 END
+            + CASE WHEN EXISTS (
+                SELECT 1 FROM task_tags rank_tt JOIN tags rank_tg ON rank_tg.id = rank_tt.tag_id
+                WHERE rank_tt.task_id = t.id AND lower(rank_tg.name) = st.term
+              ) THEN 50 WHEN EXISTS (
+                SELECT 1 FROM task_tags rank_tt JOIN tags rank_tg ON rank_tg.id = rank_tt.tag_id
+                WHERE rank_tt.task_id = t.id AND instr(lower(rank_tg.name), st.term) > 0
+              ) THEN 30 ELSE 0 END
+            + CASE WHEN instr(lower(t.body), st.term) > 0 THEN 20 ELSE 0 END
+            + CASE WHEN EXISTS (
+                SELECT 1 FROM comments rank_c
+                WHERE rank_c.task_id = t.id AND instr(lower(rank_c.body), st.term) > 0
+              ) THEN 10 ELSE 0 END
+          ), 0) FROM search_terms st) DESC,
+        CASE WHEN t.due_at IS NOT NULL AND t.due_at <= ? THEN 0 ELSE 1 END,
+        t.priority,
+        t.due_at IS NULL,
+        t.due_at,
+        t.created_at`;
+  } else {
+    params.push(nowIso());
+    sql = `${SELECT_VIEW} ${where} ${QUEUE_ORDER}`;
+  }
   if (filter.limit && filter.limit > 0) sql += ` LIMIT ${Math.floor(filter.limit)}`;
 
   return (db.prepare(sql).all(...(params as never[])) as Record<string, unknown>[]).map(

@@ -2,7 +2,12 @@ import type {
   Comment,
   EventView,
   MemoryContext,
+  MemoryBacklink,
   MemoryDocument,
+  MemoryGraph,
+  MemoryLintIssue,
+  MemorySearchResult,
+  RetrievalEvaluation,
   TaskView,
 } from '../core/index.ts';
 import { relative } from '../core/index.ts';
@@ -189,15 +194,103 @@ export function memoryTable(memories: MemoryDocument[]): string {
   }).join('\n');
 }
 
+export function memorySearchTable(memories: MemorySearchResult[], explain = false): string {
+  if (!explain) return memoryTable(memories);
+  if (!memories.length) return c.dim('No memories.');
+  return memories.map((memory) => [
+    memoryTable([memory]),
+    `  ${c.dim(memory.explanation)}`,
+    memory.snippet ? `  ${memory.snippet.replace(/\s+/g, ' ').trim()}` : '',
+  ].filter(Boolean).join('\n')).join('\n');
+}
+
 export function memoryDetail(memory: MemoryDocument): string {
   const out = [
     `${c.bold(memory.id)}  ${memory.title}`,
     `${c.cyan(memory.kind)}  ${memory.status === 'active' ? c.green(memory.status) : c.yellow(memory.status)}  ${c.dim(memory.scope === 'global' ? 'global' : (memory.project_key ?? 'project'))}`,
     c.dim(memory.path),
   ];
+  if (memory.aliases.length) out.push(c.dim(`aliases: ${memory.aliases.join(', ')}`));
   if (memory.tags.length) out.push(c.dim(memory.tags.map((tag) => `#${tag}`).join(' ')));
   if (memory.sources.length) out.push(c.dim(`sources: ${memory.sources.join(', ')}`));
+  if (memory.relations.length) {
+    out.push('', c.bold('Relations'));
+    for (const relation of memory.relations) {
+      out.push(`  ${c.cyan(relation.type)} ${c.dim(relation.target_type)} ${relation.target}`);
+    }
+  }
   out.push('', memory.body);
+  return out.join('\n');
+}
+
+export function memoryBacklinkTable(backlinks: MemoryBacklink[]): string {
+  if (!backlinks.length) return c.dim('No backlinks.');
+  return backlinks.map((backlink) => [
+    c.bold(backlink.source.id.slice(0, 12)),
+    backlink.source.title,
+    c.cyan(backlink.type),
+    c.dim(`${backlink.target_type}:${backlink.target}`),
+  ].join('  ')).join('\n');
+}
+
+export function memoryGraphText(graph: MemoryGraph): string {
+  const titleById = new Map(graph.memories.map((memory) => [memory.id, memory.title]));
+  const out = [c.bold(`Memory graph · ${graph.memories.length} nodes · ${graph.relations.length} edges`)];
+  for (const memory of graph.memories) {
+    out.push(`  ${c.bold(memory.id.slice(0, 12))}  ${memory.title}`);
+  }
+  if (graph.relations.length) out.push('', c.bold('Edges'));
+  for (const relation of graph.relations) {
+    const target = relation.target_type === 'memory'
+      ? (titleById.get(relation.target) ?? relation.target)
+      : `${relation.target_type}:${relation.target}`;
+    out.push(`  ${relation.source_id.slice(0, 12)} ${c.cyan(relation.type)} ${target}`);
+  }
+  if (graph.truncated) out.push('', c.yellow('Graph truncated; increase --limit to include more nodes.'));
+  return out.join('\n');
+}
+
+export function memoryLintText(issues: MemoryLintIssue[]): string {
+  if (!issues.length) return c.green('Memory lint passed.');
+  return issues.map((issue) => {
+    const severity = issue.severity === 'error' ? c.red(issue.severity) : c.yellow(issue.severity);
+    return `${severity}  ${c.bold(issue.memory_id.slice(0, 12))}  ${issue.code}  ${issue.message}`;
+  }).join('\n');
+}
+
+export function memorySuggestions(
+  source: MemoryDocument,
+  suggestions: MemorySearchResult[],
+  explain = false,
+): string {
+  if (!suggestions.length) return c.dim(`No unlinked suggestions for ${source.title}.`);
+  return [
+    c.bold(`Suggested links for ${source.title}`),
+    ...suggestions.flatMap((memory) => [
+      `  ${c.bold(memory.id.slice(0, 12))}  ${memory.title}  ${c.dim(`score ${memory.score.toFixed(3)}`)}`,
+      ...(explain ? [`    ${c.dim(memory.explanation)}`] : []),
+    ]),
+  ].join('\n');
+}
+
+export function memoryEvaluationText(evaluation: RetrievalEvaluation): string {
+  const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
+  const out = [
+    c.bold(`Memory retrieval evaluation · k=${evaluation.k} · ${evaluation.cases.length} cases`),
+    `Recall@${evaluation.k} ${c.cyan(percent(evaluation.recall_at_k))}  ` +
+      `MRR ${c.cyan(evaluation.mrr.toFixed(3))}  ` +
+      `precision ${c.cyan(percent(evaluation.context_precision))}  ` +
+      `stale hits ${evaluation.stale_hit_rate ? c.yellow(percent(evaluation.stale_hit_rate)) : c.green('0.0%')}`,
+  ];
+  if (evaluation.cases.length) out.push('', c.bold('Cases'));
+  for (const item of evaluation.cases) {
+    out.push(
+      `  ${c.bold(item.name)}  recall ${percent(item.recall_at_k)}  ` +
+      `RR ${item.reciprocal_rank.toFixed(3)}  precision ${percent(item.context_precision)}  ` +
+      `stale ${item.stale_hits}`,
+    );
+    out.push(c.dim(`    ${item.retrieved.length ? item.retrieved.join(', ') : 'no results'}`));
+  }
   return out.join('\n');
 }
 

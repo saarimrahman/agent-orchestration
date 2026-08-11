@@ -34,6 +34,8 @@ const BOOLEAN_FLAGS = new Set([
   'global',
   'candidate',
   'verified',
+  'semantic',
+  'explain',
 ]);
 
 function expand(name: string): string {
