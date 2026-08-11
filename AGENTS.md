@@ -1,3 +1,9 @@
+# Repository agent instructions
+
+Before modifying this repository, read [AGENT_START_HERE.md](AGENT_START_HERE.md).
+It explains how to combine the queue with iterative work, parallel subagents,
+reasonable assumptions, human escalation, and final verification.
+
 <!-- orchestration:begin -->
 ## Task queue (`orchestration`)
 

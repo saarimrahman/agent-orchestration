@@ -3,6 +3,10 @@
 A local to-do list that coding agents can read, claim, and report progress to —
 with a board you can actually look at.
 
+**Agents working on this repository:** start with
+[AGENT_START_HERE.md](AGENT_START_HERE.md). It covers the CLI lifecycle,
+parallel subagent work, iteration, assumptions, escalation, and verification.
+
 One SQLite file. A CLI for agents. A web UI for you. Nothing runs in the
 background, nothing phones home, nothing launches processes on your behalf.
 
