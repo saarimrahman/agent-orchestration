@@ -8,19 +8,36 @@
     "orchestration": "./bin/orchestration",
     "orch": "./bin/orchestration"
   },
+  "types": "./lib/sdk.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/sdk.d.ts",
+      "import": "./lib/sdk.js"
+    },
+    "./core": {
+      "types": "./lib/core/index.d.ts",
+      "import": "./lib/core/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "engines": {
     "node": ">=22.6.0"
   },
   "files": [
     "bin",
     "src",
-    "dist"
+    "dist",
+    "lib"
   ],
   "scripts": {
     "orchestration": "node ./bin/orchestration",
     "dev": "node ./scripts/dev.mjs",
     "dev:web": "vite",
-    "build": "vite build",
+    "build": "vite build && npm run build:sdk",
+    "build:sdk": "tsc src/sdk.ts --outDir lib --rootDir src --declaration --target ES2023 --module NodeNext --moduleResolution NodeNext --rewriteRelativeImportExtensions --erasableSyntaxOnly --verbatimModuleSyntax --strict --skipLibCheck --esModuleInterop --types node",
+    "prepare": "npm run build:sdk",
+    "pretest": "npm run build:sdk",
+    "pretypecheck": "npm run build:sdk",
     "start": "node ./bin/orchestration ui",
     "test": "node --disable-warning=ExperimentalWarning --test --test-force-exit",
     "typecheck": "tsc --noEmit"

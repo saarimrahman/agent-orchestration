@@ -49,6 +49,14 @@ answers.
 
 Do not stop at a plan, the first plausible patch, or one narrow passing test.
 
+Completion means the requested outcome is confirmed, not merely that an external
+asynchronous process has started. If CI, validation, review, deployment, or
+another external check is still pending, leave a progress comment that states
+what must be re-checked and what evidence will count as acceptance, then
+`orchestration snooze <ref> <when>` rather than `done`. Snoozing releases the
+lease, hides the task until the wake time, and returns it to the ready queue for
+a fresh audit. Do not close the task while its acceptance remains unconfirmed.
+
 ### Claim and report work
 
 If asked to take the next available task:
@@ -85,10 +93,11 @@ orchestration comment <ref> --progress "What is now true"
 - Blocked on other work: `orchestration add "<the blocker>"` then
   `orchestration dep add <ref> <blocker-ref>` and `orchestration release <ref>`. The task leaves
   the queue until the blocker closes, then returns on its own.
-- Not actionable yet: `orchestration snooze <ref> 3d`. It disappears and comes back.
+- Not actionable yet: `orchestration snooze <ref> 3d`. It releases the lease,
+  disappears until the wake time, and then returns to the ready queue.
 
-Always `ask` or `release` what you cannot finish. A held task is invisible to
-every other agent until its lease expires.
+Always `ask`, `snooze`, or `release` what you cannot finish. A held task is
+invisible to every other agent until its lease expires.
 
 A task in `needs_input` is off the queue, so `orchestration next` will never hand you
 a question you cannot answer. Once a human runs `orchestration answer`, it returns to

@@ -64,6 +64,7 @@ import {
   commitMemory,
   setStatus,
   skillFile,
+  snoozeTask,
   updateTask,
   STATUSES,
   MEMORY_KINDS,
@@ -470,7 +471,7 @@ function cmdSnooze(db: Db, p: Parsed): void {
   if (!when) throw new CliError('Snooze until when?  orchestration snooze demo-3 3d');
 
   const until = parseWhenOrThrow(when);
-  const updated = updateTask(db, task.id, { snoozeUntil: until }, actor(p));
+  const updated = snoozeTask(db, task.id, until, actor(p));
   emitTask(p, updated, `hidden until ${until.toISOString().slice(0, 16).replace('T', ' ')}`);
 }
 

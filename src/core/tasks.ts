@@ -372,6 +372,57 @@ export function releaseTask(db: Db, taskId: number, actor: string): TaskView {
   });
 }
 
+/**
+ * Defer open work until a future time without leaving it assigned to an agent.
+ * The task immediately returns to the ready lifecycle, but the queue's shared
+ * claimability predicate keeps it hidden until `until` passes.
+ */
+export function snoozeTask(
+  db: Db,
+  taskId: number,
+  until: Date,
+  actor: string,
+): TaskView {
+  const wake = until.toISOString();
+
+  return tx(db, () => {
+    const before = getTaskById(db, taskId);
+    if (!before) throw new Error(`No task with id ${taskId}.`);
+    if (CLOSED_STATUSES.includes(before.status)) {
+      throw new Error(
+        `${before.ref} is already ${before.status}. Reopen it before snoozing it.`,
+      );
+    }
+    if (before.status === 'needs_input') {
+      throw new Error(
+        `${before.ref} is waiting for human input. Answer it before snoozing it.`,
+      );
+    }
+
+    const ts = nowIso();
+    if (wake <= ts) throw new Error('A snooze wake time must be in the future.');
+
+    db.prepare(
+      `UPDATE tasks
+          SET status = 'ready', assignee = NULL, lease_expires_at = NULL,
+              snooze_until = ?, updated_at = ?
+        WHERE id = ?`,
+    ).run(wake, ts, taskId);
+
+    if (before.snooze_until !== wake) {
+      logEvent(db, taskId, actor, 'snooze_until', before.snooze_until, wake);
+    }
+    if (before.status !== 'ready') {
+      logEvent(db, taskId, actor, 'status', before.status, 'ready');
+    }
+    if (before.assignee !== null) {
+      logEvent(db, taskId, actor, 'released', before.assignee, null);
+    }
+
+    return getTaskById(db, taskId)!;
+  });
+}
+
 // ---------------------------------------------------------------- mutation
 
 export type UpdateInput = {
@@ -468,11 +519,22 @@ export function setStatus(
     db.prepare(
       `UPDATE tasks
           SET status = ?, closed_at = ?, updated_at = ?,
+              assignee = CASE WHEN ? THEN NULL ELSE assignee END,
               lease_expires_at = CASE WHEN ? THEN NULL ELSE lease_expires_at END
         WHERE id = ?`,
-    ).run(status, closing ? (before.closed_at ?? ts) : null, ts, closing ? 1 : 0, taskId);
+    ).run(
+      status,
+      closing ? (before.closed_at ?? ts) : null,
+      ts,
+      status === 'ready' ? 1 : 0,
+      closing || status === 'ready' ? 1 : 0,
+      taskId,
+    );
 
     if (before.status !== status) logEvent(db, taskId, actor, 'status', before.status, status);
+    if (status === 'ready' && before.assignee !== null) {
+      logEvent(db, taskId, actor, 'released', before.assignee, null);
+    }
 
     let recurrence: TaskView | null = null;
     if (closing && !wasClosed && before.recur) {

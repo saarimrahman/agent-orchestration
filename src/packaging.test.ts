@@ -42,6 +42,15 @@ describe('packaging', () => {
     assert.equal(built, served, 'vite outDir must match the directory the server serves');
   });
 
+  test('the SDK is published as compiled JavaScript outside the replaceable UI build', () => {
+    assert.equal(pkg.exports['.'].import, './lib/sdk.js');
+    assert.equal(pkg.exports['.'].types, './lib/sdk.d.ts');
+    assert.equal(pkg.exports['./core'].import, './lib/core/index.js');
+    assert.ok(pkg.files.includes('lib'), 'the packed package must include compiled SDK files');
+    assert.match(pkg.scripts['build:sdk'], /--outDir lib/);
+    assert.match(pkg.scripts.build, /build:sdk/);
+  });
+
   test('the server and the dev proxy agree on the API port', () => {
     const config = readFileSync(join(ROOT, 'vite.config.ts'), 'utf8');
     const proxyPort = /ORCHESTRATION_API_PORT \?\? process\.env\.ORCH_API_PORT \?\? (\d+)/.exec(config)?.[1];

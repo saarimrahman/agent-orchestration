@@ -13,8 +13,8 @@ import {
   releaseTask,
   requireTask,
   setStatus,
+  snoozeTask,
   staleLeases,
-  updateTask,
 } from './tasks.ts';
 import {
   addComment,
@@ -23,6 +23,7 @@ import {
   awaitingInput,
   digest,
   listComments,
+  listEvents,
 } from './activity.ts';
 import { mergeAgentsFile } from './instructions.ts';
 import { nextCronFire, parseDuration, parseWhen } from './time.ts';
@@ -70,13 +71,59 @@ describe('ready queue', () => {
     assert.deepEqual(refs(readyTasks(db)), [dependent.ref]);
   });
 
-  test('snoozed tasks leave the queue and come back on their own', () => {
-    const task = add('Later');
-    updateTask(db, task.id, { snoozeUntil: new Date(Date.now() + 60_000) }, 'test');
-    assert.deepEqual(readyTasks(db), []);
+  test('snoozing releases claimed work, hides it, then resurfaces at the wake time', (context) => {
+    const now = new Date('2030-01-01T00:00:00.000Z');
+    context.mock.timers.enable({ apis: ['Date'], now });
+    const task = add('Re-audit validation');
+    claimTask(db, task.id, 'alice');
+    const wake = new Date(now.getTime() + 60_000);
 
-    updateTask(db, task.id, { snoozeUntil: new Date(Date.now() - 1_000) }, 'test');
+    const snoozed = snoozeTask(db, task.id, wake, 'alice');
+
+    assert.equal(snoozed.status, 'ready');
+    assert.equal(snoozed.assignee, null);
+    assert.equal(snoozed.lease_expires_at, null);
+    assert.equal(snoozed.snooze_until, wake.toISOString());
+    assert.deepEqual(readyTasks(db), []);
+    assert.equal(claimTask(db, task.id, 'bob'), null, 'hidden work cannot be claimed by id');
+    assert.deepEqual(
+      listEvents(db, task.id).slice(-3).map((event) => event.field),
+      ['snooze_until', 'status', 'released'],
+    );
+
+    context.mock.timers.tick(59_999);
+    assert.deepEqual(readyTasks(db), []);
+    assert.equal(claimTask(db, task.id, 'bob'), null);
+
+    context.mock.timers.tick(1);
     assert.deepEqual(refs(readyTasks(db)), [task.ref]);
+    assert.equal(claimTask(db, task.id, 'bob')?.assignee, 'bob');
+  });
+
+  test('snooze requires a wake time strictly after the current time', (context) => {
+    const now = new Date('2030-01-01T00:00:00.000Z');
+    context.mock.timers.enable({ apis: ['Date'], now });
+    const task = add('Later');
+    assert.throws(
+      () => snoozeTask(db, task.id, now, 'test'),
+      /must be in the future/,
+    );
+  });
+
+  test('snooze does not silently revive closed work or hide a human question', () => {
+    const closed = add('Finished');
+    setStatus(db, closed.id, 'done', 'test');
+    assert.throws(
+      () => snoozeTask(db, closed.id, new Date(Date.now() + 60_000), 'test'),
+      /already done.*Reopen/,
+    );
+
+    const waiting = add('Needs a decision');
+    askForInput(db, waiting.id, 'test', 'Ship it?');
+    assert.throws(
+      () => snoozeTask(db, waiting.id, new Date(Date.now() + 60_000), 'test'),
+      /waiting for human input.*Answer/,
+    );
   });
 
   test('orders overdue first, then by priority, then by due date', () => {
@@ -166,6 +213,19 @@ describe('claiming', () => {
     assert.equal(released.assignee, null);
     assert.equal(released.status, 'ready');
     assert.deepEqual(refs(readyTasks(db)), [task.ref]);
+  });
+
+  test('reopening closed work clears ownership and makes it claimable', () => {
+    const task = add('Re-audit');
+    claimTask(db, task.id, 'alice');
+    setStatus(db, task.id, 'done', 'alice');
+
+    const { task: reopened } = setStatus(db, task.id, 'ready', 'alice');
+
+    assert.equal(reopened.assignee, null);
+    assert.equal(reopened.lease_expires_at, null);
+    assert.deepEqual(refs(readyTasks(db)), [task.ref]);
+    assert.equal(claimTask(db, task.id, 'bob')?.assignee, 'bob');
   });
 });
 
@@ -491,12 +551,32 @@ describe('AGENTS.md merge', () => {
     assert.ok(twice.startsWith('# Project\n\nSome notes.\n'));
   });
 
+  test('preserves workspace guidance after the managed block exactly', () => {
+    const marker = '<!-- orchestration:begin -->old<!-- orchestration:end -->';
+
+    for (const suffix of ['SUFFIX', '\nSUFFIX', '\r\nSUFFIX', '\n\nSUFFIX']) {
+      const merged = mergeAgentsFile(`# Project\n\n${marker}${suffix}`);
+      assert.ok(merged.endsWith(suffix.replace(/^\r?\n/, '')));
+      assert.match(merged, /SUFFIX$/);
+    }
+  });
+
   test('keeps memory admission guidance general and workflow-first', () => {
     const instructions = mergeAgentsFile('');
 
     assert.match(instructions, /A memory is durable, reusable knowledge/);
     assert.match(instructions, /identify whether an authoritative workflow or skill applies/);
     assert.doesNotMatch(instructions, /ML-Bench|SWE-Bench/);
+  });
+
+  test('keeps pending external work open under a durable re-audit contract', () => {
+    const instructions = mergeAgentsFile('');
+
+    assert.match(instructions, /external check is still pending/);
+    assert.match(instructions, /states\nwhat must be re-checked and what evidence will count as acceptance/);
+    assert.match(instructions, /Snoozing releases the\nlease/);
+    assert.match(instructions, /returns it to the ready queue for\na fresh audit/);
+    assert.match(instructions, /Do not close the task while its acceptance remains unconfirmed/);
   });
 });
 

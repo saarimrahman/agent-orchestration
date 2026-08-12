@@ -3,24 +3,25 @@
 A local to-do list that coding agents can read, claim, and report progress to —
 with a board you can actually look at.
 
-One SQLite file. A CLI for agents. A web UI for you. Nothing runs in the
+One SQLite file. A CLI and SDK for agents. A web UI for you. Nothing runs in the
 background or phones home, and it never starts agent workers. Semantic memory
 search can run a local embedding command that you explicitly configure.
 
 ```
-agents / you  ──►  orchestration CLI ──┐
-                                       ├──►  ~/.orchestration/orchestration.db
-browser  ──►  orchestration ui ────────┘
+agents / scripts  ──►  CLI or SDK ─────┐
+                                        ├──►  ~/.orchestration/orchestration.db
+browser  ─────────►  orchestration ui ─┘
 ```
 
 ## Why it works this way
 
 Agents **pull**. `orchestration` is a passive store: it never spawns or
 supervises an agent and never opens a worktree. An agent asks for work, takes
-it, reports back, and closes it. That single decision is why the whole thing is
-a few files instead of a distributed system, and why it composes with whatever
-you already use to run agents — Claude Code's `/loop`, Routines, system cron,
-or you typing at a terminal.
+it, reports back, and closes it through the CLI or the same core operations
+exposed to scripts. That single decision is why the whole thing is a few files
+instead of a distributed system, and why it composes with whatever you already
+use to run agents — Claude Code's `/loop`, Routines, system cron, or you typing
+at a terminal.
 
 The design borrows the parts that have proven out elsewhere: the ready-queue and
 atomic-claim primitives from [beads](https://github.com/steveyegge/beads), the
@@ -64,6 +65,34 @@ orchestration ready                      # only demo-1 — demo-2 is blocked
 orchestration ui                         # open the board
 ```
 
+## TypeScript SDK
+
+Scripts can use the same queue rules as the CLI through the package entrypoint:
+
+```ts
+import { openOrchestration } from 'orchestration';
+
+const queue = openOrchestration({ actor: 'release-agent' });
+try {
+  const task = queue.claimNext({ project: 'demo' });
+  if (task) {
+    queue.addComment(task.ref, 'Validation is still running.', 'progress');
+    queue.snoozeTask(task.ref, '30m');
+  }
+} finally {
+  queue.close();
+}
+```
+
+The SDK resolves the same local database and actor environment variables as
+the CLI. Pass `databasePath` or `cwd` to select another database. Low-level,
+database-first primitives remain available from `orchestration/core`.
+
+Node/TypeScript is the first SDK because it reuses the implementation's
+transactions, migrations, and atomic queue rules directly. A native Python
+client would duplicate those invariants; Python automation can use the CLI's
+`--json` interface until a cross-language client has a concrete use case.
+
 ## The agent loop
 
 This is what `orchestration init` writes into `AGENTS.md` and a Claude Code skill, so
@@ -89,6 +118,38 @@ orchestration dep add demo-1 demo-9         # found a blocker
 orchestration release demo-1                # give it back
 orchestration snooze demo-1 3d              # not actionable yet
 ```
+
+External work is not completion. If a task starts CI, validation, a deployment,
+or another asynchronous job, leave a progress comment with the run identifier,
+current evidence, the exact result to check, and the acceptance condition. Then
+snooze the same task instead of closing it:
+
+```bash
+orchestration comment demo-1 --progress \
+  "Validation run 123 is pending; re-check pass/fail balance; done means oracle 3/3 and agent 1-3/5"
+orchestration snooze demo-1 30m
+```
+
+Snoozing releases the assignment and hides the task until the requested time;
+after that it is eligible for any polling agent to claim and re-audit. It does
+not run an agent by itself—use the polling patterns under [Scheduling](#scheduling).
+Only close the task after the external result has been inspected and the stated
+acceptance condition is actually true.
+
+## Workspace-specific agent context
+
+`orchestration init` owns only the marked orchestration block in `AGENTS.md`.
+Put stable workspace guidance outside that block: what the project is for, the
+agent's role, authority boundaries, protected paths, and which local workflows
+or skills govern specialized work. Re-running init updates the managed workflow
+while preserving that surrounding context.
+
+Keep live task lists, current run state, and dated results in queue bodies,
+comments, dependencies, or memory rather than copying them into static
+instructions. That gives each new agent current context from `show` and keeps
+`AGENTS.md` from becoming a second, stale board. Put ecosystem-specific custom
+skills in their own files; do not edit the generated orchestration skill and
+expect `init --force` to preserve those edits.
 
 ## When an agent needs you
 
@@ -410,14 +471,14 @@ npm run typecheck
 
 The suite covers the parts that are subtly wrong if untested: ready-queue
 filtering, concurrent claims on one task, lease expiry and reclaim, dependency
-cycles, recurrence firing exactly once, memory retrieval/versioning, and the
-full ask/answer handoff. The UI
+cycles, snooze/resurface handoff, recurrence firing exactly once, SDK package
+imports, memory retrieval/versioning, and the full ask/answer handoff. The UI
 test bundles the real app and renders it against a real server in jsdom, which
 catches render crashes without needing a browser.
 
 ## Not included
 
 No built-in agent runner, worktrees, or log capture. No bundled embedding model
-or network embedding service. No MCP server — the CLI covers the same ground at
-zero context cost, and the core layer is a thin wrapper away if that changes.
-No accounts, multi-user permissions, or sync.
+or network embedding service. No MCP server — the CLI and SDK cover the same
+ground without another service or tool catalog. No accounts, multi-user
+permissions, or sync.
