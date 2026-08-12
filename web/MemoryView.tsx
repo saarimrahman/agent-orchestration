@@ -93,7 +93,10 @@ function MemoryMetadata({ memory, className }: { memory: MemoryDocument; classNa
 export function MemoryView({ query, project }: { query: string; project: string | null }) {
   const [memories, setMemories] = useState<MemoryDocument[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<MemoryDocument | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return new URLSearchParams(window.location.hash.slice(1)).get('memory');
+  });
   const [editing, setEditing] = useState<MemoryDocument | null>(null);
   const [deleting, setDeleting] = useState<MemoryDocument | null>(null);
   const [tagFilter, setTagFilter] = useState('all');
@@ -187,12 +190,27 @@ export function MemoryView({ query, project }: { query: string; project: string 
   };
 
   const askToDelete = (memory: MemoryDocument) => {
-    setSelected(null);
+    setSelectedId(null);
     setEditing(null);
     setDeleting(memory);
   };
 
-  if (error) {
+  const selectedSeed = useMemo(
+    () => memories?.find((memory) => memory.id === selectedId || (memory.aliases ?? []).includes(selectedId ?? '')) ?? null,
+    [memories, selectedId],
+  );
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const params = new URLSearchParams(url.hash.slice(1));
+    if (selectedId) params.set('memory', selectedId);
+    else params.delete('memory');
+    const nextHash = params.toString();
+    url.hash = nextHash ? `#${nextHash}` : '';
+    window.history.replaceState(null, '', url);
+  }, [selectedId]);
+
+  if (error && !memories) {
     return <p className="mx-5 rounded-lg border border-p0/20 bg-p0/[.08] px-3 py-2 text-[11px] text-p0">Could not load memory: {error}</p>;
   }
   if (!memories) {
@@ -317,66 +335,78 @@ export function MemoryView({ query, project }: { query: string; project: string 
         </select>
       </div>
 
-      {shown.length === 0 ? (
-        <div className="grid min-h-56 place-items-center rounded-2xl border border-dashed border-white/[.065] bg-white/[.015] px-5 text-center">
-          <div>
-            <Brain className="mx-auto size-5 text-ink-700" />
-            <p className="mt-3 text-[12px] text-ink-300">{hasFilters || query.trim() ? 'No matching memories' : 'No memories found'}</p>
-            <p className="mt-1 text-[10.5px] text-ink-600">
-              {hasFilters || query.trim()
-                ? 'Adjust the search or clear the memory filters.'
-                : <>Agents can save one with <code className="text-ink-400">orchestration remember &quot;…&quot;</code>.</>}
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="grid gap-2 xl:grid-cols-2">
-          {shown.map((memory) => {
-            const KindIcon = KIND_ICON[memory.kind];
-            return (
-              <button
-                key={memory.id}
-                type="button"
-                aria-label={`View memory: ${memory.title}`}
-                onClick={() => setSelected(memory)}
-                className="group flex min-w-0 items-start gap-3 rounded-xl border border-white/[.06] bg-ink-900/75 px-3.5 py-3 text-left shadow-[0_10px_25px_rgba(0,0,0,.08)] outline-none transition-all hover:-translate-y-px hover:border-white/[.105] hover:bg-ink-875 focus-visible:ring-2 focus-visible:ring-accent/55"
-              >
-                <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-accent/12 bg-accent/[.07] text-accent-soft">
-                  <KindIcon className="size-3.5" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[12.5px] font-semibold tracking-[-0.005em] text-ink-50">{memory.title}</span>
-                  <MemoryMetadata memory={memory} className="mt-1.5" />
-                  {query.trim() && memory.snippet && (
-                    <span className="mt-2 block line-clamp-2 text-[10px] leading-relaxed text-ink-600">{memory.snippet.replaceAll('[', '').replaceAll(']', '')}</span>
-                  )}
-                  {query.trim() && memory.explanation && (
-                    <span className="mt-1 block truncate text-[9px] text-ink-700">{memory.explanation}</span>
-                  )}
-                </span>
-                <ChevronRight className="mt-2 size-4 shrink-0 text-ink-700 transition-transform group-hover:translate-x-0.5 group-hover:text-ink-400" />
-              </button>
-            );
-          })}
-        </div>
+      {error && (
+        <p className="mb-3 rounded-lg border border-p0/20 bg-p0/[.08] px-3 py-2 text-[11px] text-p0">
+          Could not refresh memory: {error}. Showing the last successful result.
+        </p>
       )}
 
-      {selected && (
-        <MemoryDetail
-          memory={selected}
-          onClose={() => setSelected(null)}
-          onEdit={() => {
-            setEditing(selected);
-            setSelected(null);
-          }}
-          onDelete={() => askToDelete(selected)}
-          onNavigate={(memory) => setSelected(memory)}
-          onUpdated={(updated) => {
-            setMemories((current) => current?.map((memory) => memory.id === updated.id ? updated : memory) ?? null);
-            setSelected(updated);
-          }}
-        />
-      )}
+      <div className={cn('grid items-start gap-3', selectedId && 'xl:grid-cols-[minmax(280px,.85fr)_minmax(420px,1.35fr)]')}>
+        <div className={cn('grid gap-2', !selectedId && 'xl:grid-cols-2')}>
+          {shown.length === 0 ? (
+            <div className="grid min-h-56 place-items-center rounded-2xl border border-dashed border-white/[.065] bg-white/[.015] px-5 text-center">
+              <div>
+                <Brain className="mx-auto size-5 text-ink-700" />
+                <p className="mt-3 text-[12px] text-ink-300">{hasFilters || query.trim() ? 'No matching memories' : 'No memories found'}</p>
+                <p className="mt-1 text-[10.5px] text-ink-600">
+                  {hasFilters || query.trim()
+                    ? 'Adjust the search or clear the memory filters.'
+                    : <>Agents can save one with <code className="text-ink-400">orchestration remember &quot;…&quot;</code>.</>}
+                </p>
+              </div>
+            </div>
+          ) : shown.map((memory) => {
+              const KindIcon = KIND_ICON[memory.kind];
+              const isSelected = selectedId === memory.id || (memory.aliases ?? []).includes(selectedId ?? '');
+              return (
+                <button
+                  key={memory.id}
+                  type="button"
+                  aria-label={`View memory: ${memory.title}`}
+                  aria-current={isSelected ? 'true' : undefined}
+                  onClick={() => setSelectedId(memory.id)}
+                  className={cn(
+                    'group flex min-w-0 items-start gap-3 rounded-xl border bg-ink-900/75 px-3.5 py-3 text-left shadow-[0_10px_25px_rgba(0,0,0,.08)] outline-none transition-all hover:-translate-y-px hover:border-white/[.105] hover:bg-ink-875 focus-visible:ring-2 focus-visible:ring-accent/55',
+                    isSelected ? 'border-accent/45 bg-accent/[.06]' : 'border-white/[.06]',
+                  )}
+                >
+                  <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-accent/12 bg-accent/[.07] text-accent-soft">
+                    <KindIcon className="size-3.5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12.5px] font-semibold tracking-[-0.005em] text-ink-50">{memory.title}</span>
+                    <MemoryMetadata memory={memory} className="mt-1.5" />
+                    {query.trim() && memory.snippet && (
+                      <span className="mt-2 block line-clamp-2 text-[10px] leading-relaxed text-ink-600">{memory.snippet.replaceAll('[', '').replaceAll(']', '')}</span>
+                    )}
+                    {query.trim() && memory.explanation && (
+                      <span className="mt-1 block truncate text-[9px] text-ink-700">{memory.explanation}</span>
+                    )}
+                  </span>
+                  <ChevronRight className="mt-2 size-4 shrink-0 text-ink-700 transition-transform group-hover:translate-x-0.5 group-hover:text-ink-400" />
+                </button>
+              );
+            })}
+        </div>
+
+        {selectedId && (
+          <MemoryDetail
+            memoryId={selectedId}
+            seed={selectedSeed}
+            onClose={() => setSelectedId(null)}
+            onEdit={(memory) => {
+              setEditing(memory);
+              setSelectedId(null);
+            }}
+            onDelete={askToDelete}
+            onNavigate={(memory) => setSelectedId(typeof memory === 'string' ? memory : memory.id)}
+            onUpdated={(updated) => {
+              setMemories((current) => current?.map((memory) => memory.id === updated.id ? updated : memory) ?? null);
+              setSelectedId(updated.id);
+            }}
+          />
+        )}
+      </div>
 
       {editing && (
         <MemoryEditor
@@ -405,21 +435,26 @@ export function MemoryView({ query, project }: { query: string; project: string 
 }
 
 function MemoryDetail({
-  memory,
+  memoryId,
+  seed,
   onClose,
   onEdit,
   onDelete,
   onUpdated,
   onNavigate,
 }: {
-  memory: MemoryDocument;
+  memoryId: string;
+  seed: MemoryDocument | null;
   onClose: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
+  onEdit: (memory: MemoryDocument) => void;
+  onDelete: (memory: MemoryDocument) => void;
   onUpdated: (memory: MemoryDocument) => void;
-  onNavigate: (memory: MemoryDocument) => void;
+  onNavigate: (memory: MemoryDocument | string) => void;
 }) {
-  const KindIcon = KIND_ICON[memory.kind];
+  const [memory, setMemory] = useState<MemoryDocument | null>(seed);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = useState(true);
+  const [reload, setReload] = useState(0);
   const [connections, setConnections] = useState<MemoryConnections | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [relationType, setRelationType] = useState<MemoryRelationType>('relates');
@@ -432,19 +467,45 @@ function MemoryDetail({
 
   useEffect(() => {
     let alive = true;
+    setMemory(seed);
+    setDetailError(null);
+    setDetailLoading(true);
     setConnections(null);
     setConnectionError(null);
     setShowGraph(false);
     setGraph(null);
     setGraphError(null);
-    void api.memoryConnections(memory.id).then(
-      (next) => { if (alive) setConnections(next); },
+    void api.memory(memoryId).then(
+      (next) => {
+        if (!alive) return;
+        setMemory(next);
+        setDetailLoading(false);
+      },
+      (err: Error) => {
+        if (!alive) return;
+        setDetailError(err.message);
+        setDetailLoading(false);
+      },
+    );
+    void api.memoryConnections(memoryId).then(
+      (next) => {
+        if (!alive) return;
+        setConnections(next);
+        setMemory((current) => current ?? next.memory);
+      },
       (err: Error) => { if (alive) setConnectionError(err.message); },
     );
     return () => { alive = false; };
-  }, [memory.id]);
+  }, [memoryId, reload]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   const toggleGraph = async () => {
+    if (!memory) return;
     if (showGraph) {
       setShowGraph(false);
       return;
@@ -460,13 +521,14 @@ function MemoryDetail({
   };
 
   const mutateRelation = async (relation: MemoryRelation, remove = false) => {
-    if (connectionBusy) return;
+    if (connectionBusy || !memory) return;
     setConnectionBusy(true);
     setConnectionError(null);
     try {
       const updated = remove
         ? await api.unlinkMemory(memory.id, relation)
         : await api.linkMemory(memory.id, relation);
+      setMemory(updated);
       onUpdated(updated);
       setConnections(await api.memoryConnections(updated.id));
       if (showGraph) setGraph(await api.memoryGraph(updated.id, 2, 16));
@@ -479,31 +541,52 @@ function MemoryDetail({
     }
   };
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  const KindIcon = memory ? KIND_ICON[memory.kind] : Brain;
 
   return (
-    <div className="dialog-backdrop fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/65 px-3 py-[7vh]" onClick={onClose}>
+    <div
+      className="dialog-backdrop fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/65 px-3 py-[4vh] xl:static xl:z-auto xl:block xl:overflow-visible xl:bg-transparent xl:p-0 xl:[backdrop-filter:none]"
+      onClick={onClose}
+    >
       <div
-        role="dialog"
-        aria-modal="true"
+        role="region"
         aria-labelledby="memory-detail-title"
-        className="dialog-panel surface-shadow w-full max-w-[700px] overflow-hidden rounded-2xl border border-white/[.08] bg-ink-900"
+        data-memory-reader
+        className="dialog-panel surface-shadow w-full max-w-[760px] overflow-hidden rounded-2xl border border-white/[.08] bg-ink-900 xl:sticky xl:top-0 xl:flex xl:max-h-[calc(100vh-12rem)] xl:max-w-none xl:flex-col"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="flex items-center gap-3 border-b border-white/[.055] px-5 py-4">
           <span className="grid size-9 shrink-0 place-items-center rounded-xl border border-accent/15 bg-accent/10 text-accent-soft"><KindIcon className="size-4" /></span>
           <div className="min-w-0">
-            <h2 id="memory-detail-title" className="truncate text-[14px] font-semibold text-ink-50">{memory.title}</h2>
-            <p className="mt-0.5 truncate font-mono text-[9px] text-ink-650">{memory.id}</p>
+            <h2 id="memory-detail-title" className="truncate text-[14px] font-semibold text-ink-50">{memory?.title ?? 'Loading memory…'}</h2>
+            <p className="mt-0.5 truncate font-mono text-[9px] text-ink-650">{memory?.id ?? memoryId}</p>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose} className="ml-auto"><X /><span className="sr-only">Close</span></Button>
         </header>
 
-        <div className="p-5">
+        <div className="overflow-y-auto p-5">
+          {detailError && (
+            <div data-memory-detail-error className="mb-4 rounded-lg border border-p0/20 bg-p0/[.08] px-3 py-2 text-[10.5px] text-p0">
+              <p>Could not refresh this memory: {detailError}</p>
+              {memory && <p className="mt-1 text-ink-500">Showing the last indexed copy.</p>}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-2"
+                aria-label="Retry loading selected memory"
+                onClick={() => setReload((value) => value + 1)}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
+          {detailLoading && memory && <p className="mb-3 text-[9.5px] text-ink-650">Refreshing from the Markdown source…</p>}
+          {!memory && !detailError && (
+            <p className="flex items-center gap-2 py-10 text-[11px] text-ink-600">
+              <span className="size-4 animate-spin rounded-full border-2 border-ink-700 border-t-accent" /> Loading memory…
+            </p>
+          )}
+          {memory && <>
           <div className="flex flex-wrap items-start gap-2">
             <MemoryMetadata memory={memory} className="flex-1" />
             <span className="ml-auto shrink-0 text-[9.5px] text-ink-650">Updated {new Date(memory.updated_at).toLocaleString()}</span>
@@ -558,7 +641,15 @@ function MemoryDetail({
                   >
                     <Badge>{relation.type}</Badge>
                     <span className="text-ink-600">{relation.target_type}</span>
-                    <span className="min-w-0 flex-1 truncate font-mono text-ink-300">{relation.target}</span>
+                    {relation.target_type === 'memory' ? (
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 truncate text-left font-mono text-accent-soft hover:underline"
+                        onClick={() => onNavigate(relation.target)}
+                      >
+                        {relation.target}
+                      </button>
+                    ) : <span className="min-w-0 flex-1 truncate font-mono text-ink-300">{relation.target}</span>}
                     <Button
                       variant="ghost"
                       size="icon"
@@ -578,11 +669,16 @@ function MemoryDetail({
               <div className="mt-3 space-y-1.5">
                 <p className="text-[9px] font-medium uppercase tracking-[.12em] text-ink-650">Backlinks</p>
                 {connections.backlinks.map((backlink) => (
-                  <div key={`${backlink.source_id}:${backlink.type}`} className="rounded-lg border border-white/[.05] bg-black/10 px-2.5 py-2 text-[10.5px] text-ink-400">
+                  <button
+                    type="button"
+                    key={`${backlink.source_id}:${backlink.type}`}
+                    onClick={() => onNavigate(backlink.source)}
+                    className="block w-full rounded-lg border border-white/[.05] bg-black/10 px-2.5 py-2 text-left text-[10.5px] text-ink-400 hover:border-accent/25 hover:bg-accent/[.04]"
+                  >
                     <span className="font-medium text-ink-200">{backlink.source.title}</span>
                     <span className="mx-1.5 text-ink-700">·</span>
                     <span>{backlink.type}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
@@ -621,12 +717,13 @@ function MemoryDetail({
             </div>
             {connectionError && <p className="mt-2 rounded-lg border border-p0/20 bg-p0/[.08] px-3 py-2 text-[10.5px] text-p0">{connectionError}</p>}
           </section>
+          </>}
         </div>
 
         <footer className="flex items-center gap-2 border-t border-white/[.055] bg-black/10 px-5 py-3.5">
-          <Button variant="danger" size="sm" onClick={onDelete}><Trash2 /> Delete</Button>
+          <Button variant="danger" size="sm" disabled={!memory} onClick={() => memory && onDelete(memory)}><Trash2 /> Delete</Button>
           <Button variant="ghost" size="sm" onClick={onClose} className="ml-auto">Close</Button>
-          <Button size="sm" onClick={onEdit}><Pencil /> Edit memory</Button>
+          <Button size="sm" disabled={!memory} onClick={() => memory && onEdit(memory)}><Pencil /> Edit memory</Button>
         </footer>
       </div>
     </div>

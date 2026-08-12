@@ -1,10 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   renameSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -14,7 +18,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import type { Db } from './db.ts';
-import { nowIso, tx } from './db.ts';
+import { nowIso, openDb, tx } from './db.ts';
 import {
   configuredEmbeddingProvider,
   cosineSimilarity,
@@ -24,7 +28,7 @@ import {
 } from './embeddings.ts';
 import { CONFIG_DIRS, envSetting } from './env.ts';
 import type { Project, TaskView } from './types.ts';
-import { requireProject } from './projects.ts';
+import { listProjects, requireProject } from './projects.ts';
 
 export const MEMORY_KINDS = [
   'fact',
@@ -163,6 +167,55 @@ export type RetrievalEvaluation = {
   cases: RetrievalEvaluationCase[];
 };
 
+export type MemoryMigrationState =
+  | 'missing'
+  | 'legacy_only'
+  | 'current_only'
+  | 'synchronized'
+  | 'mergeable'
+  | 'conflict';
+
+export type MemoryMigrationConflict = {
+  code: 'invalid_layout' | 'invalid_memory' | 'path_conflict' | 'duplicate_id' | 'relation_target';
+  path: string;
+  message: string;
+};
+
+export type MemoryMigrationInventory = {
+  source: string;
+  destination: string;
+  state: MemoryMigrationState;
+  source_exists: boolean;
+  destination_exists: boolean;
+  source_files: number;
+  destination_files: number;
+  source_memories: number;
+  destination_memories: number;
+  source_has_git: boolean;
+  destination_has_git: boolean;
+  source_only_files: string[];
+  destination_only_files: string[];
+  conflicts: MemoryMigrationConflict[];
+};
+
+export type MemoryMigrationOptions = {
+  source?: string;
+  destination?: string;
+  /** Preserve and report dangling memory relations instead of refusing migration. */
+  allowUnresolvedMemoryTargets?: boolean;
+};
+
+export type MemoryMigrationReport = MemoryMigrationInventory & {
+  migrated: boolean;
+  source_preserved: true;
+  backup: string | null;
+  memories: number;
+  copied_files: number;
+  rewritten_memories: number;
+  canonicalized_relations: number;
+  unresolved_relations: Array<{ memory_id: string; target: string }>;
+};
+
 const INDEX_BEGIN = '<!-- orchestration:index:begin -->';
 const INDEX_END = '<!-- orchestration:index:end -->';
 
@@ -211,6 +264,15 @@ function expandConfiguredPath(value: string, base: string): string {
   return resolve(base, value);
 }
 
+/** Stable home-based roots used by the explicit legacy-to-current migration. */
+export function legacyMemoryRoot(home = homedir()): string {
+  return join(home, '.orch', 'memory');
+}
+
+export function currentMemoryRoot(home = homedir()): string {
+  return join(home, '.orchestration', 'memory');
+}
+
 /**
  * Memory is deliberately separate from the working repository by default.
  * A project can opt into another location in `.orchestration/config.json`, but
@@ -245,8 +307,8 @@ export function resolveMemoryPath(cwd = process.cwd()): string {
     dir = parent;
   }
 
-  const legacy = join(homedir(), '.orch', 'memory');
-  const current = join(homedir(), '.orchestration', 'memory');
+  const legacy = legacyMemoryRoot();
+  const current = currentMemoryRoot();
   if (!existsSync(current) && existsSync(legacy)) return legacy;
   return current;
 }
@@ -1909,6 +1971,722 @@ export async function evaluateMemoryRetrieval(
     context_precision: average('context_precision'),
     cases,
   };
+}
+
+type MigrationEntry = {
+  relative: string;
+  absolute: string;
+  kind: 'directory' | 'file' | 'symlink';
+};
+
+type MigrationRootInspection = {
+  root: string;
+  exists: boolean;
+  entries: MigrationEntry[];
+  documents: MemoryDocument[];
+  renderedByPath: Map<string, string>;
+  conflicts: MemoryMigrationConflict[];
+  unresolved: Array<{ memory_id: string; target: string }>;
+  canonicalizedRelations: number;
+  needsNormalization: boolean;
+};
+
+function migrationRelative(root: string, path: string): string {
+  return relative(root, path).replaceAll('\\', '/');
+}
+
+function migrationEntries(root: string): MigrationEntry[] {
+  if (!existsSync(root)) return [];
+  const entries: MigrationEntry[] = [];
+  const visit = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const absolute = join(dir, entry.name);
+      const item: MigrationEntry = {
+        relative: migrationRelative(root, absolute),
+        absolute,
+        kind: entry.isDirectory() ? 'directory' : entry.isSymbolicLink() ? 'symlink' : 'file',
+      };
+      entries.push(item);
+      if (item.kind === 'directory') visit(absolute);
+    }
+  };
+  visit(root);
+  return entries.sort((a, b) => a.relative.localeCompare(b.relative));
+}
+
+function isGitMigrationPath(path: string): boolean {
+  return path === '.git' || path.startsWith('.git/');
+}
+
+function comparableIndex(raw: string): string {
+  return raw.replace(indexBlockPattern(), '<!-- memory:index -->').trim();
+}
+
+function migrationEntryContent(entry: MigrationEntry): string {
+  if (entry.kind === 'symlink') return `symlink:${readlinkSync(entry.absolute)}`;
+  if (entry.kind === 'directory') return 'directory';
+  const raw = readFileSync(entry.absolute);
+  if (basename(entry.absolute) === 'MEMORY.md') {
+    return `index:${comparableIndex(raw.toString('utf8'))}`;
+  }
+  return `file:${createHash('sha256').update(raw).digest('hex')}`;
+}
+
+/** Content fingerprint used to detect concurrent writes during migration. */
+export function memoryStoreFingerprint(root: string): string | null {
+  const absolute = resolve(root);
+  if (!existsSync(absolute)) return null;
+  const digest = createHash('sha256');
+  for (const entry of migrationEntries(absolute)) {
+    digest.update(entry.relative);
+    digest.update('\0');
+    digest.update(entry.kind);
+    digest.update('\0');
+    if (entry.kind !== 'directory') digest.update(migrationEntryContent(entry));
+    digest.update('\0');
+  }
+  return digest.digest('hex');
+}
+
+function projectForMigrationPath(
+  db: Db,
+  root: string,
+  path: string,
+): Project | null | undefined {
+  const parts = migrationRelative(root, path).split('/');
+  if (parts[0] === 'global' && parts.length > 1) return null;
+  if (parts[0] !== 'projects' || parts.length < 3) return undefined;
+  return listProjects(db, true).find((project) => project.key === parts[1]);
+}
+
+function canonicalMigrationRelations(
+  documents: MemoryDocument[],
+  allowUnresolved: boolean,
+): {
+  documents: MemoryDocument[];
+  conflicts: MemoryMigrationConflict[];
+  unresolved: Array<{ memory_id: string; target: string }>;
+  canonicalized: number;
+} {
+  const conflicts: MemoryMigrationConflict[] = [];
+  const unresolved: Array<{ memory_id: string; target: string }> = [];
+  let canonicalized = 0;
+  const normalized = documents.map((document) => ({
+    ...document,
+    aliases: uniqueStrings([document.id, ...document.aliases]),
+    relations: document.relations.map((relation) => ({ ...relation })),
+  }));
+
+  for (const document of normalized) {
+    document.relations = document.relations.map((relation) => {
+      try {
+        assertRelationShape(relation);
+      } catch (error) {
+        conflicts.push({
+          code: 'relation_target',
+          path: document.path,
+          message: (error as Error).message,
+        });
+        return relation;
+      }
+      if (relation.target_type !== 'memory') return relation;
+      const visible = normalized.filter((candidate) =>
+        candidate.scope === 'global' || (
+          document.scope === 'project' &&
+          candidate.scope === 'project' &&
+          candidate.project_key === document.project_key
+        ));
+      const exact = visible.filter((candidate) =>
+        candidate.id === relation.target || candidate.aliases.includes(relation.target));
+      const matches = exact.length
+        ? exact
+        : visible.filter((candidate) => candidate.id.startsWith(relation.target));
+      if (matches.length !== 1) {
+        const detail = matches.length
+          ? `is ambiguous (${matches.map((candidate) => candidate.id).join(', ')})`
+          : 'does not resolve';
+        if (allowUnresolved && matches.length === 0) {
+          unresolved.push({ memory_id: document.id, target: relation.target });
+          return relation;
+        }
+        conflicts.push({
+          code: 'relation_target',
+          path: document.path,
+          message: `Memory relation target "${relation.target}" ${detail}.`,
+        });
+        return relation;
+      }
+      const target = matches[0];
+      if (target.id === document.id) {
+        conflicts.push({
+          code: 'relation_target',
+          path: document.path,
+          message: `Memory ${document.id} cannot link to itself.`,
+        });
+        return relation;
+      }
+      if (relation.type === 'supersedes' && (
+        target.scope !== document.scope || target.project_key !== document.project_key
+      )) {
+        conflicts.push({
+          code: 'relation_target',
+          path: document.path,
+          message: `Supersedes target ${target.id} is not in the same memory scope.`,
+        });
+        return relation;
+      }
+      if (target.id !== relation.target) canonicalized += 1;
+      return { ...relation, target: target.id };
+    });
+    document.relations = uniqueRelations(document.relations);
+    document.supersedes = document.relations.find(
+      (relation) => relation.type === 'supersedes' && relation.target_type === 'memory',
+    )?.target ?? null;
+  }
+
+  // Older stores represented replacement as a scalar link and commonly
+  // archived the old note. Current semantics make replacement explicit: the
+  // replacement is active and its target is superseded. Upgrade both halves
+  // together so a successful migration also passes the normal memory lint.
+  const byId = new Map(normalized.map((document) => [document.id, document]));
+  for (const document of normalized) {
+    for (const relation of document.relations) {
+      if (relation.type !== 'supersedes' || relation.target_type !== 'memory') continue;
+      const target = byId.get(relation.target);
+      if (!target) continue;
+      document.status = 'active';
+      target.status = 'superseded';
+    }
+  }
+  return { documents: normalized, conflicts, unresolved, canonicalized };
+}
+
+function inspectMigrationRoot(
+  db: Db,
+  root: string,
+  allowUnresolved: boolean,
+): MigrationRootInspection {
+  const absoluteRoot = resolve(root);
+  const entries = migrationEntries(absoluteRoot);
+  if (!existsSync(absoluteRoot)) {
+    return {
+      root: absoluteRoot,
+      exists: false,
+      entries,
+      documents: [],
+      renderedByPath: new Map(),
+      conflicts: [],
+      unresolved: [],
+      canonicalizedRelations: 0,
+      needsNormalization: false,
+    };
+  }
+
+  const conflicts: MemoryMigrationConflict[] = [];
+  const projects = listProjects(db, true);
+  const projectsByKey = new Map(projects.map((project) => [project.key, project]));
+  const projectsDir = join(absoluteRoot, 'projects');
+  if (existsSync(projectsDir)) {
+    for (const entry of readdirSync(projectsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        conflicts.push({
+          code: 'invalid_layout',
+          path: join(projectsDir, entry.name),
+          message: `Memory projects entry "${entry.name}" is not a directory.`,
+        });
+      } else if (!projectsByKey.has(entry.name)) {
+        conflicts.push({
+          code: 'invalid_layout',
+          path: join(projectsDir, entry.name),
+          message: `Memory project directory "${entry.name}" has no matching project in the database.`,
+        });
+      }
+    }
+  }
+
+  const topicEntries = entries.filter((entry) =>
+    !isGitMigrationPath(entry.relative) &&
+    entry.relative.endsWith('.md') &&
+    basename(entry.relative) !== 'MEMORY.md');
+  const documents: MemoryDocument[] = [];
+  for (const entry of topicEntries) {
+    if (entry.kind !== 'file') {
+      conflicts.push({
+        code: 'invalid_layout',
+        path: entry.absolute,
+        message: 'A memory topic must be a regular Markdown file.',
+      });
+      continue;
+    }
+    const project = projectForMigrationPath(db, absoluteRoot, entry.absolute);
+    if (project === undefined) {
+      conflicts.push({
+        code: 'invalid_layout',
+        path: entry.absolute,
+        message: 'Markdown topic is outside global/ or a known projects/<key>/ scope.',
+      });
+      continue;
+    }
+    try {
+      documents.push(parseMemoryFile(entry.absolute, project));
+    } catch (error) {
+      conflicts.push({
+        code: 'invalid_memory',
+        path: entry.absolute,
+        message: (error as Error).message,
+      });
+    }
+  }
+
+  const pathsById = new Map<string, string[]>();
+  for (const document of documents) {
+    pathsById.set(document.id, [...(pathsById.get(document.id) ?? []), document.path]);
+  }
+  for (const [id, paths] of pathsById) {
+    if (paths.length < 2) continue;
+    for (const path of paths) {
+      conflicts.push({
+        code: 'duplicate_id',
+        path,
+        message: `Memory id ${id} appears in multiple files: ${paths.join(', ')}.`,
+      });
+    }
+  }
+
+  const relations = canonicalMigrationRelations(documents, allowUnresolved);
+  conflicts.push(...relations.conflicts);
+  const renderedByPath = new Map<string, string>();
+  let needsNormalization = entries.some((entry) =>
+    entry.kind === 'file' && basename(entry.relative) === 'MEMORY.md' &&
+    readFileSync(entry.absolute, 'utf8').includes(LEGACY_INDEX_BEGIN));
+  for (const document of relations.documents) {
+    const rendered = renderMemory(document);
+    renderedByPath.set(migrationRelative(absoluteRoot, document.path), rendered);
+    if (readFileSync(document.path, 'utf8') !== rendered) needsNormalization = true;
+  }
+  return {
+    root: absoluteRoot,
+    exists: true,
+    entries,
+    documents: relations.documents,
+    renderedByPath,
+    conflicts,
+    unresolved: relations.unresolved,
+    canonicalizedRelations: relations.canonicalized,
+    needsNormalization,
+  };
+}
+
+function assertMigrationPaths(source: string, destination: string): void {
+  const from = resolve(source);
+  const to = resolve(destination);
+  if (from === to) throw new Error('Memory migration source and destination must be different.');
+  if (to.startsWith(`${from}/`) || from.startsWith(`${to}/`)) {
+    throw new Error('Memory migration roots cannot be nested inside one another.');
+  }
+}
+
+function compareMigrationRoots(
+  source: MigrationRootInspection,
+  destination: MigrationRootInspection,
+): {
+  sourceOnly: string[];
+  destinationOnly: string[];
+  conflicts: MemoryMigrationConflict[];
+} {
+  const conflicts = [...source.conflicts, ...destination.conflicts];
+  const usable = (entry: MigrationEntry): boolean => !isGitMigrationPath(entry.relative);
+  const from = new Map(source.entries.filter(usable).map((entry) => [entry.relative, entry]));
+  const to = new Map(destination.entries.filter(usable).map((entry) => [entry.relative, entry]));
+  const sourceOnly = [...from.entries()]
+    .filter(([path, entry]) => entry.kind !== 'directory' && !to.has(path))
+    .map(([path]) => path);
+  const destinationOnly = [...to.entries()]
+    .filter(([path, entry]) => entry.kind !== 'directory' && !from.has(path))
+    .map(([path]) => path);
+  for (const [path, sourceEntry] of from) {
+    const destinationEntry = to.get(path);
+    if (!destinationEntry) continue;
+    const sourceRendered = source.renderedByPath.get(path);
+    const destinationRendered = destination.renderedByPath.get(path);
+    const same = sourceEntry.kind === destinationEntry.kind && (
+      sourceRendered !== undefined && destinationRendered !== undefined
+        ? sourceRendered === destinationRendered
+        : migrationEntryContent(sourceEntry) === migrationEntryContent(destinationEntry)
+    );
+    if (!same) {
+      conflicts.push({
+        code: 'path_conflict',
+        path,
+        message: `Source and destination contain different content at ${path}.`,
+      });
+    }
+  }
+
+  const destinationIds = new Map(destination.documents.map((document) => [document.id, document]));
+  for (const document of source.documents) {
+    const other = destinationIds.get(document.id);
+    if (!other) continue;
+    const sourcePath = migrationRelative(source.root, document.path);
+    const destinationPath = migrationRelative(destination.root, other.path);
+    if (sourcePath !== destinationPath) {
+      conflicts.push({
+        code: 'duplicate_id',
+        path: sourcePath,
+        message: `Memory id ${document.id} exists at both ${sourcePath} and ${destinationPath}.`,
+      });
+    }
+  }
+  return { sourceOnly, destinationOnly, conflicts };
+}
+
+/** Inventory a legacy/current pair without changing either store. */
+export function inspectMemoryMigration(
+  db: Db,
+  options: MemoryMigrationOptions = {},
+): MemoryMigrationInventory {
+  const sourcePath = resolve(options.source ?? legacyMemoryRoot());
+  const destinationPath = resolve(options.destination ?? currentMemoryRoot());
+  assertMigrationPaths(sourcePath, destinationPath);
+  const source = inspectMigrationRoot(db, sourcePath, Boolean(options.allowUnresolvedMemoryTargets));
+  const destination = inspectMigrationRoot(
+    db,
+    destinationPath,
+    Boolean(options.allowUnresolvedMemoryTargets),
+  );
+  const compared = compareMigrationRoots(source, destination);
+  let state: MemoryMigrationState;
+  if (compared.conflicts.length) state = 'conflict';
+  else if (!source.exists && !destination.exists) state = 'missing';
+  else if (source.exists && !destination.exists) state = 'legacy_only';
+  else if (!source.exists) state = 'current_only';
+  else if (compared.sourceOnly.length) state = 'mergeable';
+  else state = 'synchronized';
+  const countFiles = (inspection: MigrationRootInspection): number =>
+    inspection.entries.filter((entry) => entry.kind !== 'directory').length;
+  return {
+    source: sourcePath,
+    destination: destinationPath,
+    state,
+    source_exists: source.exists,
+    destination_exists: destination.exists,
+    source_files: countFiles(source),
+    destination_files: countFiles(destination),
+    source_memories: source.documents.length,
+    destination_memories: destination.documents.length,
+    source_has_git: existsSync(join(sourcePath, '.git')),
+    destination_has_git: existsSync(join(destinationPath, '.git')),
+    source_only_files: compared.sourceOnly,
+    destination_only_files: compared.destinationOnly,
+    conflicts: compared.conflicts,
+  };
+}
+
+function cloneRoot(source: string, destination: string): void {
+  cpSync(source, destination, {
+    recursive: true,
+    preserveTimestamps: true,
+    verbatimSymlinks: true,
+  });
+}
+
+function copyMissingMigrationEntries(source: string, destination: string): void {
+  const visit = (from: string, relativePath = ''): void => {
+    for (const entry of readdirSync(from, { withFileTypes: true })) {
+      if (!relativePath && entry.name === '.git') continue;
+      const nextRelative = relativePath ? join(relativePath, entry.name) : entry.name;
+      const sourcePath = join(from, entry.name);
+      const destinationPath = join(destination, nextRelative);
+      if (existsSync(destinationPath)) {
+        const destinationEntry = lstatSync(destinationPath);
+        const sourceKind = entry.isDirectory() ? 'directory' : entry.isSymbolicLink() ? 'symlink' : 'file';
+        const destinationKind = destinationEntry.isDirectory()
+          ? 'directory'
+          : destinationEntry.isSymbolicLink() ? 'symlink' : 'file';
+        if (sourceKind !== destinationKind) {
+          throw new Error(
+            `Memory migration path collision at ${nextRelative}: source is ${sourceKind}, ` +
+            `destination is ${destinationKind}.`,
+          );
+        }
+        if (sourceKind === 'directory') {
+          visit(sourcePath, nextRelative);
+        }
+        continue;
+      }
+      cpSync(sourcePath, destinationPath, {
+        recursive: entry.isDirectory(),
+        preserveTimestamps: true,
+        verbatimSymlinks: true,
+      });
+    }
+  };
+  visit(source);
+}
+
+function seedMigrationProjects(source: Db, destination: Db): Project[] {
+  const projects = listProjects(source, true);
+  const insert = destination.prepare(
+    `INSERT INTO projects (id, key, name, color, archived_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  for (const project of projects) {
+    insert.run(
+      project.id,
+      project.key,
+      project.name,
+      project.color,
+      project.archived_at,
+      project.created_at,
+    );
+  }
+  return projects;
+}
+
+function seedMigrationLintReferences(source: Db, destination: Db): Project[] {
+  const projects = seedMigrationProjects(source, destination);
+  const insertTask = destination.prepare(
+    `INSERT INTO tasks (id, ref, project_id, seq, title, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const tasks = source.prepare(
+    'SELECT id, ref, project_id, seq, title, created_at, updated_at FROM tasks ORDER BY id',
+  ).all() as unknown as Array<Record<string, unknown>>;
+  for (const task of tasks) {
+    insertTask.run(
+      task.id as number,
+      String(task.ref),
+      task.project_id as number,
+      task.seq as number,
+      String(task.title),
+      String(task.created_at),
+      String(task.updated_at),
+    );
+  }
+  const insertComment = destination.prepare(
+    `INSERT INTO comments (id, task_id, author, kind, body, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  const comments = source.prepare(
+    'SELECT id, task_id, author, kind, body, created_at FROM comments ORDER BY id',
+  ).all() as unknown as Array<Record<string, unknown>>;
+  for (const comment of comments) {
+    insertComment.run(
+      comment.id as number,
+      comment.task_id as number,
+      String(comment.author),
+      String(comment.kind),
+      String(comment.body),
+      String(comment.created_at),
+    );
+  }
+  return projects;
+}
+
+function reindexMigrationRoot(db: Db, root: string, refreshIndexes: boolean): number {
+  let count = 0;
+  const projects = listProjects(db, true);
+  const global = syncMemoryScope(db, root, null);
+  count += global.length;
+  if (refreshIndexes && existsSync(memoryScopePath(root, null))) refreshMemoryIndex(root, null);
+  for (const project of projects) {
+    const memories = syncMemoryScope(db, root, project);
+    count += memories.length;
+    if (refreshIndexes && existsSync(memoryScopePath(root, project))) {
+      refreshMemoryIndex(root, project);
+    }
+  }
+  return count;
+}
+
+function normalizeMigrationStage(
+  db: Db,
+  stage: string,
+  allowUnresolved: boolean,
+): {
+  memories: number;
+  rewritten: number;
+  canonicalized: number;
+  unresolved: Array<{ memory_id: string; target: string }>;
+} {
+  const inspection = inspectMigrationRoot(db, stage, allowUnresolved);
+  if (inspection.conflicts.length) {
+    throw new Error(inspection.conflicts.map((conflict) => conflict.message).join('\n'));
+  }
+  let rewritten = 0;
+  for (const document of inspection.documents) {
+    const rendered = renderMemory(document);
+    if (readFileSync(document.path, 'utf8') === rendered) continue;
+    atomicWrite(document.path, rendered);
+    rewritten += 1;
+  }
+
+  const scratch = openDb(':memory:');
+  try {
+    const projects = seedMigrationLintReferences(db, scratch);
+    const memories = reindexMigrationRoot(scratch, stage, true);
+    const verified = inspectMigrationRoot(scratch, stage, allowUnresolved);
+    if (verified.conflicts.length) {
+      throw new Error(verified.conflicts.map((conflict) => conflict.message).join('\n'));
+    }
+    if (memories !== verified.documents.length) {
+      throw new Error(
+        `Migration indexed ${memories} memories but found ${verified.documents.length} topic files.`,
+      );
+    }
+    const allowedUnresolved = new Set(verified.unresolved.map(
+      (relation) => `${relation.memory_id}\0${relation.target}`,
+    ));
+    const lintIssues = new Map<string, MemoryLintIssue>();
+    for (const scope of [null, ...projects] as Array<Project | null>) {
+      for (const issue of lintMemories(scratch, stage, scope)) {
+        if (
+          allowUnresolved && issue.code === 'missing_target' &&
+          issue.relation?.target_type === 'memory' &&
+          allowedUnresolved.has(`${issue.memory_id}\0${issue.relation.target}`)
+        ) continue;
+        const key = JSON.stringify([
+          issue.code,
+          issue.memory_id,
+          issue.relation?.type,
+          issue.relation?.target_type,
+          issue.relation?.target,
+        ]);
+        lintIssues.set(key, issue);
+      }
+    }
+    if (lintIssues.size) {
+      throw new Error(
+        'Staged memory lint failed:\n' + [...lintIssues.values()]
+          .map((issue) => `- ${issue.memory_id} [${issue.code}]: ${issue.message}`)
+          .join('\n'),
+      );
+    }
+    return {
+      memories,
+      rewritten,
+      canonicalized: inspection.canonicalizedRelations,
+      unresolved: inspection.unresolved,
+    };
+  } finally {
+    scratch.close();
+  }
+}
+
+function migrationFailure(inventory: MemoryMigrationInventory): Error {
+  return new Error(
+    `Memory migration found ${inventory.conflicts.length} unsafe conflict(s):\n` +
+    inventory.conflicts.map((conflict) => `- ${conflict.path}: ${conflict.message}`).join('\n'),
+  );
+}
+
+/**
+ * Copy legacy memory into the current root through a validated sibling stage.
+ * The legacy source is never changed or removed. Existing current memory is
+ * atomically moved to a retained backup before activation.
+ */
+export function migrateMemoryStore(
+  db: Db,
+  options: MemoryMigrationOptions = {},
+): MemoryMigrationReport {
+  const inventory = inspectMemoryMigration(db, options);
+  if (inventory.conflicts.length) throw migrationFailure(inventory);
+  const allowUnresolved = Boolean(options.allowUnresolvedMemoryTargets);
+  const sourceInspection = inspectMigrationRoot(db, inventory.source, allowUnresolved);
+  const destinationInspection = inspectMigrationRoot(db, inventory.destination, allowUnresolved);
+  const sourceFingerprint = memoryStoreFingerprint(inventory.source);
+  const destinationFingerprint = memoryStoreFingerprint(inventory.destination);
+  const needsDestinationRewrite = destinationInspection.needsNormalization;
+  const shouldMigrate = inventory.state === 'legacy_only' || inventory.state === 'mergeable' ||
+    ((inventory.state === 'current_only' || inventory.state === 'synchronized') && needsDestinationRewrite);
+
+  if (!shouldMigrate) {
+    const memories = inventory.destination_exists
+      ? reindexMigrationRoot(db, inventory.destination, false)
+      : 0;
+    return {
+      ...inventory,
+      migrated: false,
+      source_preserved: true,
+      backup: null,
+      memories,
+      copied_files: 0,
+      rewritten_memories: 0,
+      canonicalized_relations: 0,
+      unresolved_relations: destinationInspection.unresolved,
+    };
+  }
+
+  mkdirSync(dirname(inventory.destination), { recursive: true });
+  const stage = `${inventory.destination}.migration-${randomUUID()}.tmp`;
+  const backup = inventory.destination_exists
+    ? `${inventory.destination}.backup-${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`
+    : null;
+  let destinationMoved = false;
+  let stageActivated = false;
+  try {
+    if (inventory.destination_exists) {
+      cloneRoot(inventory.destination, stage);
+      if (inventory.source_exists) copyMissingMigrationEntries(inventory.source, stage);
+    } else {
+      cloneRoot(inventory.source, stage);
+    }
+    const normalized = normalizeMigrationStage(db, stage, allowUnresolved);
+    if (!commitMemory(stage, 'memory: migrate legacy store and upgrade format')) {
+      throw new Error('Could not commit the migrated memory format to its private Git history.');
+    }
+    if (memoryStoreFingerprint(inventory.source) !== sourceFingerprint) {
+      throw new Error(
+        `Memory migration source changed while it was being copied: ${inventory.source}. ` +
+        'No destination was activated; run the migration again.',
+      );
+    }
+    if (memoryStoreFingerprint(inventory.destination) !== destinationFingerprint) {
+      throw new Error(
+        `Memory migration destination changed while it was being prepared: ${inventory.destination}. ` +
+        'No destination was activated; run the migration again.',
+      );
+    }
+    if (backup) {
+      renameSync(inventory.destination, backup);
+      destinationMoved = true;
+    }
+    renameSync(stage, inventory.destination);
+    stageActivated = true;
+    reindexMigrationRoot(db, inventory.destination, false);
+    return {
+      ...inventory,
+      migrated: true,
+      source_preserved: true,
+      backup,
+      memories: normalized.memories,
+      copied_files: inventory.state === 'legacy_only'
+        ? sourceInspection.entries.filter((entry) => entry.kind !== 'directory').length
+        : inventory.source_only_files.length,
+      rewritten_memories: normalized.rewritten,
+      canonicalized_relations: normalized.canonicalized,
+      unresolved_relations: normalized.unresolved,
+    };
+  } catch (error) {
+    try {
+      if (stageActivated && existsSync(inventory.destination)) {
+        renameSync(inventory.destination, stage);
+        stageActivated = false;
+      }
+      if (destinationMoved && backup && existsSync(backup)) {
+        renameSync(backup, inventory.destination);
+        destinationMoved = false;
+      }
+      if (existsSync(stage)) rmSync(stage, { recursive: true, force: true });
+      const restored = existsSync(inventory.destination)
+        ? inventory.destination
+        : existsSync(inventory.source) ? inventory.source : null;
+      if (restored) reindexMigrationRoot(db, restored, false);
+    } catch {
+      // Preserve the original migration failure; source and backup are never deleted.
+    }
+    throw error;
+  }
 }
 
 function gitOutput(root: string, args: string[]): string {

@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import {
   existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 
 import { openDb, type Db } from './db.ts';
 import type { EmbeddingProvider } from './embeddings.ts';
@@ -17,9 +19,12 @@ import { createProject } from './projects.ts';
 import { createTask } from './tasks.ts';
 import {
   archiveMemory,
+  currentMemoryRoot,
   deleteMemory,
   evaluateMemoryRetrieval,
   getMemory,
+  inspectMemoryMigration,
+  legacyMemoryRoot,
   linkMemory,
   lintMemories,
   listMemories,
@@ -27,6 +32,8 @@ import {
   memoryContextForTask,
   memoryGraph,
   memoryHistory,
+  memoryStoreFingerprint,
+  migrateMemoryStore,
   rememberMemory,
   searchMemories,
   syncMemoryScope,
@@ -671,5 +678,272 @@ describe('Markdown memory', () => {
     assert.equal(evaluation.stale_hit_rate, 0.5);
     assert.equal(evaluation.context_precision, 1);
     assert.deepEqual(evaluation.cases.map((item) => item.retrieved.length), [1, 1]);
+  });
+});
+
+describe('memory store migration', () => {
+  test('exposes stable legacy and current home roots', () => {
+    assert.equal(legacyMemoryRoot('/tmp/memory-home'), '/tmp/memory-home/.orch/memory');
+    assert.equal(currentMemoryRoot('/tmp/memory-home'), '/tmp/memory-home/.orchestration/memory');
+  });
+
+  test('copies a legacy-only store, preserves history, and upgrades every topic', () => {
+    const legacy = join(root, 'legacy');
+    const current = join(root, 'current');
+    const target = rememberMemory(db, legacy, {
+      project,
+      title: 'Original rollout rule',
+      body: 'Roll out directly to the fleet.',
+    });
+    const replacement = rememberMemory(db, legacy, {
+      project,
+      title: 'Replacement rollout rule',
+      body: 'Use a canary rollout first.',
+    });
+    for (const memory of [target, replacement]) {
+      writeFileSync(
+        memory.path,
+        readFileSync(memory.path, 'utf8').replace(/^aliases: .*\n/m, ''),
+        'utf8',
+      );
+    }
+    setFlatFrontmatter(replacement.path, 'supersedes', target.id.slice(0, 12));
+    writeFileSync(join(legacy, 'private-note.txt'), 'preserve this file', 'utf8');
+    const sourceBefore = readFileSync(replacement.path, 'utf8');
+    const historyBefore = memoryHistory(legacy);
+
+    const inventory = inspectMemoryMigration(db, { source: legacy, destination: current });
+    assert.equal(inventory.state, 'legacy_only');
+    assert.equal(inventory.source_memories, 2);
+    const report = migrateMemoryStore(db, { source: legacy, destination: current });
+
+    assert.equal(report.migrated, true);
+    assert.equal(report.source_preserved, true);
+    assert.equal(report.backup, null);
+    assert.equal(report.memories, 2);
+    assert.equal(report.rewritten_memories, 2);
+    assert.equal(report.canonicalized_relations, 1);
+    assert.equal(readFileSync(replacement.path, 'utf8'), sourceBefore);
+    assert.equal(memoryHistory(legacy), historyBefore);
+    assert.equal(readFileSync(join(current, 'private-note.txt'), 'utf8'), 'preserve this file');
+    assert.ok(existsSync(join(current, '.git')));
+    const migratedHistory = memoryHistory(current);
+    assert.match(migratedHistory, /memory: migrate legacy store and upgrade format/);
+    assert.ok(migratedHistory.includes(historyBefore.split(/\s/)[0]));
+
+    const migrated = getMemory(db, current, project, replacement.id);
+    const migratedTarget = getMemory(db, current, project, target.id);
+    assert.deepEqual(migrated.aliases, [replacement.id]);
+    assert.equal(migrated.status, 'active');
+    assert.equal(migratedTarget.status, 'superseded');
+    assert.equal(migrated.supersedes, target.id);
+    assert.deepEqual(migrated.relations, [{
+      type: 'supersedes',
+      target_type: 'memory',
+      target: target.id,
+    }]);
+    assert.match(readFileSync(migrated.path, 'utf8'), /^aliases: \[/m);
+    assert.match(readFileSync(migrated.path, 'utf8'), /^relations: \[/m);
+  });
+
+  test('treats an already-current store as a verified no-op', () => {
+    const legacy = join(root, 'legacy');
+    const current = join(root, 'current');
+    rememberMemory(db, current, { project, body: 'Current memory remains visible.' });
+
+    assert.equal(
+      inspectMemoryMigration(db, { source: legacy, destination: current }).state,
+      'current_only',
+    );
+    const report = migrateMemoryStore(db, { source: legacy, destination: current });
+    assert.equal(report.migrated, false);
+    assert.equal(report.backup, null);
+    assert.equal(report.memories, 1);
+    assert.equal(listMemories(db, current, project).length, 1);
+  });
+
+  test('refuses different content at the same relative path without changing either root', () => {
+    const legacy = join(root, 'legacy');
+    const current = join(root, 'current');
+    const memory = rememberMemory(db, legacy, {
+      project,
+      body: 'Legacy content must win only by an explicit decision.',
+      version: false,
+    });
+    const relativePath = relative(legacy, memory.path);
+    const destinationPath = join(current, relativePath);
+    mkdirSync(dirname(destinationPath), { recursive: true });
+    const destinationRaw = readFileSync(memory.path, 'utf8').replace('Legacy content', 'Current content');
+    writeFileSync(destinationPath, destinationRaw, 'utf8');
+    const sourceFingerprint = memoryStoreFingerprint(legacy);
+    const destinationFingerprint = memoryStoreFingerprint(current);
+
+    const inventory = inspectMemoryMigration(db, { source: legacy, destination: current });
+    assert.equal(inventory.state, 'conflict');
+    assert.ok(inventory.conflicts.some((conflict) => conflict.code === 'path_conflict'));
+    assert.throws(
+      () => migrateMemoryStore(db, { source: legacy, destination: current }),
+      /unsafe conflict/,
+    );
+    assert.equal(memoryStoreFingerprint(legacy), sourceFingerprint);
+    assert.equal(memoryStoreFingerprint(current), destinationFingerprint);
+  });
+
+  test('refuses file and directory shape collisions instead of silently dropping source data', () => {
+    const legacy = join(root, 'legacy');
+    const current = join(root, 'current');
+    mkdirSync(legacy, { recursive: true });
+    mkdirSync(join(current, 'collision'), { recursive: true });
+    writeFileSync(join(legacy, 'collision'), 'legacy file must survive\n', 'utf8');
+    writeFileSync(join(current, 'collision', 'current.txt'), 'current directory must survive\n', 'utf8');
+    const sourceFingerprint = memoryStoreFingerprint(legacy);
+    const destinationFingerprint = memoryStoreFingerprint(current);
+
+    const inventory = inspectMemoryMigration(db, { source: legacy, destination: current });
+    assert.equal(inventory.state, 'conflict');
+    assert.ok(inventory.conflicts.some((conflict) =>
+      conflict.code === 'path_conflict' && conflict.path === 'collision'));
+    assert.throws(
+      () => migrateMemoryStore(db, { source: legacy, destination: current }),
+      /unsafe conflict/,
+    );
+    assert.equal(memoryStoreFingerprint(legacy), sourceFingerprint);
+    assert.equal(memoryStoreFingerprint(current), destinationFingerprint);
+  });
+
+  test('merges non-overlapping stores through a retained destination backup', () => {
+    const legacy = join(root, 'legacy');
+    const current = join(root, 'current');
+    const legacyMemory = rememberMemory(db, legacy, {
+      project,
+      title: 'Legacy-only knowledge',
+      body: 'This was learned before the directory rename.',
+    });
+    const currentMemory = rememberMemory(db, current, {
+      project,
+      title: 'Current-only knowledge',
+      body: 'This was learned after the directory rename.',
+    });
+
+    const report = migrateMemoryStore(db, { source: legacy, destination: current });
+    assert.equal(report.migrated, true);
+    assert.ok(report.backup);
+    assert.ok(existsSync(report.backup!));
+    assert.ok(existsSync(legacyMemory.path));
+    assert.equal(getMemory(db, current, project, legacyMemory.id).body,
+      'This was learned before the directory rename.');
+    assert.equal(getMemory(db, current, project, currentMemory.id).body,
+      'This was learned after the directory rename.');
+  });
+
+  test('is idempotent after a successful legacy migration', () => {
+    const legacy = join(root, 'legacy');
+    const current = join(root, 'current');
+    rememberMemory(db, legacy, { project, body: 'Migrate this exactly once.' });
+
+    const first = migrateMemoryStore(db, { source: legacy, destination: current });
+    const fingerprint = memoryStoreFingerprint(current);
+    const second = migrateMemoryStore(db, { source: legacy, destination: current });
+    assert.equal(first.migrated, true);
+    assert.equal(second.state, 'synchronized');
+    assert.equal(second.migrated, false);
+    assert.equal(second.backup, null);
+    assert.equal(memoryStoreFingerprint(current), fingerprint);
+  });
+
+  test('leaves no partial destination when validation fails', () => {
+    const legacy = join(root, 'legacy');
+    const current = join(root, 'current');
+    const broken = join(legacy, 'global', 'notes', 'broken.md');
+    mkdirSync(dirname(broken), { recursive: true });
+    writeFileSync(broken, '# Missing frontmatter\n', 'utf8');
+
+    assert.throws(
+      () => migrateMemoryStore(db, { source: legacy, destination: current }),
+      /unsafe conflict|needs YAML frontmatter/,
+    );
+    assert.equal(existsSync(current), false);
+    assert.equal(readFileSync(broken, 'utf8'), '# Missing frontmatter\n');
+    assert.deepEqual(
+      readdirSync(root).filter((name) => name.includes('.migration-')),
+      [],
+    );
+  });
+
+  test('rejects a staged supersession cycle before activating the destination', () => {
+    const legacy = join(root, 'legacy');
+    const current = join(root, 'current');
+    const first = rememberMemory(db, legacy, { project, body: 'First replacement.' });
+    const second = rememberMemory(db, legacy, { project, body: 'Second replacement.' });
+    const relation = (target: string) => [{
+      type: 'supersedes',
+      target_type: 'memory',
+      target,
+    }];
+    setFlatFrontmatter(first.path, 'relations', relation(second.id));
+    setFlatFrontmatter(second.path, 'relations', relation(first.id));
+    const sourceFingerprint = memoryStoreFingerprint(legacy);
+
+    assert.throws(
+      () => migrateMemoryStore(db, { source: legacy, destination: current }),
+      /Staged memory lint failed:[\s\S]*supersedes_cycle/,
+    );
+    assert.equal(existsSync(current), false);
+    assert.equal(memoryStoreFingerprint(legacy), sourceFingerprint);
+    assert.deepEqual(
+      readdirSync(root).filter((name) => name.includes('.migration-')),
+      [],
+    );
+  });
+
+  test('rolls back a staged copy when private-history validation fails', () => {
+    const legacy = join(root, 'legacy');
+    const current = join(root, 'current');
+    rememberMemory(db, legacy, {
+      project,
+      body: 'The staged migration must never become partially visible.',
+      version: false,
+    });
+    writeFileSync(join(legacy, '.git'), 'not a valid git directory\n', 'utf8');
+    const sourceFingerprint = memoryStoreFingerprint(legacy);
+
+    assert.throws(
+      () => migrateMemoryStore(db, { source: legacy, destination: current }),
+      /Could not commit the migrated memory format/,
+    );
+    assert.equal(existsSync(current), false);
+    assert.equal(memoryStoreFingerprint(legacy), sourceFingerprint);
+    assert.deepEqual(
+      readdirSync(root).filter((name) => name.includes('.migration-')),
+      [],
+    );
+  });
+
+  test('reports unknown projects and uncovered Markdown instead of silently skipping them', () => {
+    const legacy = join(root, 'legacy');
+    const unknown = join(legacy, 'projects', 'missing-project', 'notes', 'unknown.md');
+    const misplaced = join(legacy, 'loose-topic.md');
+    mkdirSync(dirname(unknown), { recursive: true });
+    writeFileSync(unknown, '# Unknown project topic\n', 'utf8');
+    writeFileSync(misplaced, '# Loose topic\n', 'utf8');
+
+    const inventory = inspectMemoryMigration(db, {
+      source: legacy,
+      destination: join(root, 'current'),
+    });
+    assert.equal(inventory.state, 'conflict');
+    assert.ok(inventory.conflicts.some((conflict) =>
+      conflict.message.includes('no matching project')));
+    assert.ok(inventory.conflicts.some((conflict) =>
+      conflict.message.includes('outside global/')));
+  });
+
+  test('fingerprints all store content for the concurrent-write activation guard', () => {
+    const legacy = join(root, 'legacy');
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, 'one.txt'), 'one', 'utf8');
+    const before = memoryStoreFingerprint(legacy);
+    writeFileSync(join(legacy, 'two.txt'), 'two', 'utf8');
+    assert.notEqual(memoryStoreFingerprint(legacy), before);
   });
 });

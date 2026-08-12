@@ -191,6 +191,8 @@ export const api = {
     if (options.graphDepth) params.set('graph_depth', String(options.graphDepth));
     return request<MemoryDocument[]>(`/memories/search?${params}`);
   },
+  memory: (id: string) =>
+    request<MemoryDocument>(`/memories/${encodeURIComponent(id)}`),
   memoryConnections: (id: string) =>
     request<MemoryConnections>(`/memories/${encodeURIComponent(id)}/connections`),
   memoryBacklinks: (id: string) =>

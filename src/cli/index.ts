@@ -1,6 +1,6 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { userInfo } from 'node:os';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -38,8 +38,10 @@ import {
   memoryGraph,
   memoryHistory,
   memoryStatus,
+  inspectMemoryMigration,
   lintMemories,
   linkMemory,
+  migrateMemoryStore,
   openDb,
   parseDuration,
   parseWhenOrThrow,
@@ -91,6 +93,7 @@ import {
   memoryEvaluationText,
   memoryGraphText,
   memoryLintText,
+  memoryMigrationText,
   memorySuggestions,
   memorySearchTable,
   memoryTable,
@@ -143,6 +146,7 @@ Memory (stored outside the repo in ~/.orchestration/memory)
   memory lint             Audit aliases, links, targets, and supersession
   memory suggest-links <id> [--limit 5]
   memory evaluate <golden.json> [--k N]
+  memory migrate [--dry-run] [--from PATH] [--to PATH]
   memory diff|history|status|commit
   memory reindex            Rebuild the SQLite index from Markdown
   context <task-ref>        Show bounded memory relevant to a task
@@ -754,6 +758,20 @@ async function cmdMemory(db: Db, p: Parsed): Promise<void> {
     out(p, { root, status }, () => status);
     return;
   }
+  if (action === 'migrate' || action === 'migration') {
+    const options = {
+      source: str(p, 'from'),
+      destination: str(p, 'to'),
+      allowUnresolvedMemoryTargets: bool(p, 'allow-unresolved'),
+    };
+    const dryRun = bool(p, 'dry-run');
+    const result = dryRun
+      ? inspectMemoryMigration(db, options)
+      : migrateMemoryStore(db, options);
+    const payload = { dry_run: dryRun, ...result };
+    out(p, payload, () => memoryMigrationText(payload));
+    return;
+  }
   if (action === 'diff' && !identifier) {
     const diff = memoryDiff(root);
     out(p, { root, diff }, () => diff);
@@ -907,7 +925,7 @@ async function cmdMemory(db: Db, p: Parsed): Promise<void> {
     return;
   }
 
-  throw new CliError(`Unknown memory action "${action}". Use ls, search, show, edit, promote, archive, link, unlink, backlinks, graph, lint, suggest-links, evaluate, diff, history, status, commit, or reindex.`);
+  throw new CliError(`Unknown memory action "${action}". Use ls, search, show, edit, promote, archive, link, unlink, backlinks, graph, lint, suggest-links, evaluate, migrate, diff, history, status, commit, or reindex.`);
 }
 
 function cmdContext(db: Db, p: Parsed): void {
@@ -975,23 +993,74 @@ async function cmdUi(db: Db, p: Parsed): Promise<void> {
   });
 }
 
+const UI_BUILD_STAMP = '.orchestration-ui-build.json';
+
+function uiSourceFiles(root: string): string[] {
+  const files = ['vite.config.ts', 'package.json', 'package-lock.json']
+    .map((name) => join(root, name))
+    .filter(existsSync);
+  const visit = (directory: string): void => {
+    if (!existsSync(directory)) return;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile()) files.push(path);
+    }
+  };
+  visit(join(root, 'web'));
+  return files.sort();
+}
+
+/** Content identity for the source files that produce the board bundle. */
+export function uiBuildFingerprint(root: string): string {
+  const digest = createHash('sha256');
+  for (const path of uiSourceFiles(root)) {
+    digest.update(path.slice(root.length));
+    digest.update('\0');
+    digest.update(readFileSync(path));
+    digest.update('\0');
+  }
+  return digest.digest('hex');
+}
+
+/** Existing bundles are reusable only when they were built from these sources. */
+export function uiBuildIsFresh(root: string): boolean {
+  const dist = join(root, 'dist');
+  if (!existsSync(join(dist, 'index.html'))) return false;
+  // Published packages ship the prebuilt bundle but intentionally omit the
+  // frontend source. Their bundle is immutable for that installed version.
+  if (!existsSync(join(root, 'web'))) return true;
+  try {
+    const stamp = JSON.parse(readFileSync(join(dist, UI_BUILD_STAMP), 'utf8')) as {
+      fingerprint?: unknown;
+    };
+    return stamp.fingerprint === uiBuildFingerprint(root);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Build the UI on first run rather than serving a page that explains how to
- * build it. "It told me to run a command" is a worse first experience than
- * waiting two seconds, and forgetting the build step otherwise produces a
- * screen that looks broken.
+ * Build the UI automatically and refresh it whenever its source identity
+ * changes. A first-run-only check can serve an old bundle forever after a pull.
  */
 async function ensureUiBuilt(): Promise<void> {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-  if (existsSync(join(root, 'dist', 'index.html'))) return;
+  if (uiBuildIsFresh(root)) return;
 
-  console.log('Building the board (first run only)…');
+  console.log(existsSync(join(root, 'dist', 'index.html'))
+    ? 'Refreshing the board after source changes…'
+    : 'Building the board…');
   try {
     const { build } = await import('vite');
     // Pass configFile, not root. Given a bare `root`, Vite ignores
     // vite.config.ts and writes to <root>/dist, which is not where the server
     // looks.
     await build({ configFile: join(root, 'vite.config.ts'), logLevel: 'warn' });
+    writeFileSync(
+      join(root, 'dist', UI_BUILD_STAMP),
+      `${JSON.stringify({ version: 1, fingerprint: uiBuildFingerprint(root) }, null, 2)}\n`,
+    );
   } catch (err) {
     throw new CliError(
       `Could not build the web UI automatically: ${(err as Error).message}\n` +

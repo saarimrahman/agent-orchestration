@@ -51,8 +51,8 @@ npm link               # optional: puts `orchestration` on your PATH
 
 Without `npm link`, use `node bin/orchestration …` or `npm run orchestration -- …`.
 
-There is no separate build step — `orchestration ui` builds the board itself the first
-time it runs.
+There is no separate build step — `orchestration ui` builds the board itself and
+refreshes a local bundle whenever the checked-out UI source changes.
 
 ## Quick start
 
@@ -183,6 +183,21 @@ commits writes made through the CLI, giving memories diffs and rollback without
 ever committing or pushing them to the project repository. Direct file edits
 remain visible in `orchestration memory diff`; use `orchestration memory commit` to save them.
 
+Installs from before the directory rename may still have memory under
+`~/.orch/memory`. Inspect and migrate it explicitly:
+
+```bash
+orchestration memory migrate --dry-run
+orchestration memory migrate
+```
+
+Migration copies through a sibling staging directory, validates every topic and
+known project, upgrades aliases and typed relations, preserves private Git
+history, and atomically activates the current root. The legacy source is retained;
+an existing current root is also retained as a timestamped backup. Conflicts or
+concurrent writes abort before activation. Use `--from` and `--to` for non-default
+roots, or `--allow-unresolved` only when intentionally retaining dangling links.
+
 Canonical frontmatter carries stable aliases and typed links. Memory and file
 links are also rendered as Obsidian-compatible `[[wikilinks]]`, while SQLite
 derives a normalized relation index for fast backlinks, graph traversal, and
@@ -274,6 +289,7 @@ secrets in them.
 | `orchestration memory lint` | Audit aliases, targets, links, and supersession cycles |
 | `orchestration memory suggest-links <id> [--limit 5] [--all]` | Rank possible memory links without changing the source |
 | `orchestration memory evaluate <golden.json> [--k 3]` | Score golden retrieval cases with recall@k, MRR, stale-hit rate, and context precision |
+| `orchestration memory migrate [--dry-run] [--from PATH] [--to PATH]` | Reconcile legacy/current roots through a validated, recoverable migration |
 | `orchestration memory diff\|history\|status\|commit` | Inspect or save private memory history |
 | `orchestration memory reindex` | Rebuild full-text search from Markdown |
 | `orchestration context <ref>` | Relevant memory for one task, with a bounded result count |
@@ -369,6 +385,9 @@ from many repos. Override with `$ORCHESTRATION_DB`, or with a `.orchestration/co
 Durable Markdown memory lives at `~/.orchestration/memory` by default. Override it with
 `$ORCHESTRATION_MEMORY_DIR`, or add `"memory": "<path>"` to `.orchestration/config.json`. This
 path is its own private Git repository and has no remote by default.
+
+For compatibility, a legacy-only `~/.orch/memory` remains readable until the
+explicit migration above creates the current root.
 
 Semantic memory retrieval is optional and local. When using
 `orchestration memory search "<query>" --semantic`, set

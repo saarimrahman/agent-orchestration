@@ -296,6 +296,11 @@ export function createApp(
     });
   });
 
+  /** Resolve one canonical document by id or stable alias for reader panes and deep links. */
+  app.get('/api/memories/:id', (ctx) => {
+    return ctx.json(findMemory(ctx.req.param('id')).memory);
+  });
+
   app.get('/api/memories/:id/connections', (ctx) => {
     const { root, memory, project } = findMemory(ctx.req.param('id'));
     const backlinks = memoryBacklinks(db, root, project, 'memory', memory.id);

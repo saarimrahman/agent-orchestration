@@ -52,7 +52,22 @@ before(async () => {
   const db = seed();
   const browserMemory = rememberMemory(db, uiMemoryRoot, {
     title: 'Browser memory',
-    body: 'Visible and editable from the board.',
+    body: [
+      '# Browser memory',
+      '',
+      'Visible and editable from the board.',
+      '',
+      '## Legacy notes',
+      '',
+      '- A long Markdown body remains readable after migration.',
+      '- **Metadata**, links, and source history stay alongside it.',
+      '',
+      '> This resembles an older hand-written knowledge note.',
+      '',
+      '```text',
+      'legacy/memories/browser.md',
+      '```',
+    ].join('\n'),
     tags: ['browser', 'ui'],
     project: null,
   });
@@ -107,7 +122,7 @@ describe('api', () => {
     try {
       const shared = rememberMemory(db, root, {
         title: 'Shared rule',
-        body: 'Use small commits.',
+        body: '# Shared rule\n\nUse small commits.\n\n- Preserve **history**\n- Verify the result',
         project: null,
       });
       rememberMemory(db, root, {
@@ -128,6 +143,18 @@ describe('api', () => {
           ['Shared rule', null, 'active'],
         ],
       );
+
+      const detail = await app.request(`http://x/api/memories/${encodeURIComponent(shared.id)}`);
+      assert.equal(detail.status, 200);
+      const document = await detail.json() as { id: string; body: string; aliases: string[] };
+      assert.equal(document.id, shared.id);
+      assert.match(document.body, /Preserve \*\*history\*\*/);
+
+      const aliasDetail = await app.request(
+        `http://x/api/memories/${encodeURIComponent(document.aliases[0])}`,
+      );
+      assert.equal(aliasDetail.status, 200, 'stable aliases should support reader deep links');
+      assert.equal((await aliasDetail.json() as { id: string }).id, shared.id);
 
       const patched = await app.request(`http://x/api/memories/${shared.id}`, {
         method: 'PATCH',
@@ -466,6 +493,8 @@ describe('web bundle', () => {
     dom.window.addEventListener('error', (e: ErrorEvent) => errors.push(e.message));
 
     const globals = dom.window as unknown as Record<string, unknown>;
+    const fetchedPaths: string[] = [];
+    let failNextMemoryDetail = false;
 
     // jsdom has no EventSource; the board must still paint from the initial fetch.
     globals.EventSource = class {
@@ -474,8 +503,19 @@ describe('web bundle', () => {
       onerror = null;
     };
     // jsdom's fetch is not wired to the test server, so point it there.
-    globals.fetch = (input: string, init?: RequestInit) =>
-      fetch(new URL(String(input), base), init);
+    globals.fetch = (input: string, init?: RequestInit) => {
+      const url = new URL(String(input), base);
+      fetchedPaths.push(url.pathname);
+      if (
+        failNextMemoryDetail
+        && (!init?.method || init.method === 'GET')
+        && /^\/api\/memories\/[^/]+$/.test(url.pathname)
+      ) {
+        failNextMemoryDetail = false;
+        return Promise.resolve(Response.json({ error: 'Fixture detail failure' }, { status: 500 }));
+      }
+      return fetch(url, init);
+    };
 
     const script = dom.window.document.createElement('script');
     script.textContent = bundled.outputFiles[0].text;
@@ -596,6 +636,17 @@ describe('web bundle', () => {
     memoryRow.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /Visible and editable from the board/);
+    assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /Legacy notes/);
+    const memoryReader = dom.window.document.querySelector('[data-memory-reader]');
+    assert.ok(memoryReader, 'selection should open the reading pane');
+    assert.equal(memoryReader.getAttribute('role'), 'region');
+    assert.equal(memoryReader.hasAttribute('aria-modal'), false, 'the inline desktop reader must not hide its library from assistive technology');
+    assert.equal(memoryRow.getAttribute('aria-current'), 'true', 'the library should retain and mark the selected row');
+    assert.match(dom.window.location.hash, /^#memory=/, 'the selected memory should have a reloadable URL fragment');
+    assert.ok(
+      fetchedPaths.some((path) => /^\/api\/memories\/[^/]+$/.test(path)),
+      'opening a row should refresh the canonical document from the detail endpoint',
+    );
     assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /Connections/);
     assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /relates/);
     assert.ok(dom.window.document.querySelector('select[aria-label="Memory relation type"]'));
@@ -609,7 +660,22 @@ describe('web bundle', () => {
     const graph = dom.window.document.querySelector('svg[aria-label="Memory relationship graph"]');
     assert.ok(graph, 'the memory detail should render a bounded relationship graph on demand');
     assert.equal(graph.querySelectorAll('line').length, 1);
-    assert.ok(graph.querySelector('[aria-label="Open memory: Alpha memory"]'));
+    const alphaNode = graph.querySelector('[aria-label="Open memory: Alpha memory"]');
+    assert.ok(alphaNode);
+    failNextMemoryDetail = true;
+    alphaNode.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.match(dom.window.document.querySelector('[data-memory-detail-error]')?.textContent ?? '', /Fixture detail failure/);
+    assert.ok(
+      dom.window.document.querySelector('button[aria-label="View memory: Browser memory"]'),
+      'a selected-memory failure must not blank the library',
+    );
+    assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /A second memory for browsing controls/);
+
+    memoryRow = dom.window.document.querySelector('button[aria-label="View memory: Browser memory"]');
+    assert.ok(memoryRow);
+    memoryRow.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 100));
     const editButton = [...dom.window.document.querySelectorAll('button')]
       .find((button) => button.textContent?.trim() === 'Edit memory');
     assert.ok(editButton, 'memory detail should offer an edit action');
@@ -622,6 +688,58 @@ describe('web bundle', () => {
     deleteButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.match(dom.window.document.getElementById('root')?.textContent ?? '', /Delete “Browser memory”\?/);
+
+    dom.window.close();
+  });
+
+  test('reloads a selected memory deep link into the reader', async () => {
+    const bundled = await build({
+      entryPoints: [join(ROOT, 'web', 'main.tsx')],
+      bundle: true,
+      write: false,
+      format: 'iife',
+      platform: 'browser',
+      jsx: 'automatic',
+      loader: { '.css': 'empty' },
+      define: { 'process.env.NODE_ENV': '"production"' },
+    });
+
+    const base = `http://127.0.0.1:${server!.port}`;
+    const memories = await fetch(`${base}/api/memories`).then((response) => response.json()) as Array<{ id: string; title: string }>;
+    const browserMemory = memories.find((memory) => memory.title === 'Browser memory');
+    assert.ok(browserMemory);
+
+    const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+      url: `${base}/#memory=${encodeURIComponent(browserMemory.id)}`,
+      runScripts: 'dangerously',
+      pretendToBeVisual: true,
+    });
+    const errors: string[] = [];
+    dom.virtualConsole.on('jsdomError', (err: Error) => errors.push(err.message));
+    dom.window.addEventListener('error', (event: ErrorEvent) => errors.push(event.message));
+
+    const globals = dom.window as unknown as Record<string, unknown>;
+    globals.EventSource = class {
+      addEventListener() {}
+      close() {}
+      onerror = null;
+    };
+    globals.fetch = (input: string, init?: RequestInit) => fetch(new URL(String(input), base), init);
+
+    const script = dom.window.document.createElement('script');
+    script.textContent = bundled.outputFiles[0].text;
+    dom.window.document.body.appendChild(script);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+
+    const text = dom.window.document.getElementById('root')?.textContent ?? '';
+    assert.deepEqual(errors, []);
+    assert.match(text, /Durable memory/);
+    assert.match(text, /Visible and editable from the board/);
+    assert.ok(dom.window.document.querySelector('[data-memory-reader]'));
+    assert.equal(
+      dom.window.document.querySelector('button[aria-label="View memory: Browser memory"]')?.getAttribute('aria-current'),
+      'true',
+    );
 
     dom.window.close();
   });

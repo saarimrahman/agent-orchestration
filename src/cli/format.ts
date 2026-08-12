@@ -6,6 +6,8 @@ import type {
   MemoryDocument,
   MemoryGraph,
   MemoryLintIssue,
+  MemoryMigrationInventory,
+  MemoryMigrationReport,
   MemorySearchResult,
   RetrievalEvaluation,
   TaskView,
@@ -290,6 +292,42 @@ export function memoryEvaluationText(evaluation: RetrievalEvaluation): string {
       `stale ${item.stale_hits}`,
     );
     out.push(c.dim(`    ${item.retrieved.length ? item.retrieved.join(', ') : 'no results'}`));
+  }
+  return out.join('\n');
+}
+
+export function memoryMigrationText(
+  result: MemoryMigrationInventory & Partial<MemoryMigrationReport> & { dry_run?: boolean },
+): string {
+  const out = [
+    c.bold(`Memory storage · ${result.state}`),
+    `${c.dim('legacy')}  ${result.source}`,
+    `${c.dim('current')} ${result.destination}`,
+    `${result.source_memories} legacy memories · ${result.destination_memories} current memories`,
+  ];
+  if (result.conflicts.length) {
+    out.push('', c.red(`${result.conflicts.length} conflict(s); nothing was moved.`));
+    for (const conflict of result.conflicts) {
+      out.push(`  ${c.red(conflict.code)}  ${conflict.path}`, c.dim(`    ${conflict.message}`));
+    }
+    return out.join('\n');
+  }
+  if (result.dry_run) {
+    out.push('', c.cyan('Dry run only; no files were changed.'));
+  } else if (result.migrated) {
+    out.push(
+      '',
+      c.green(`Migrated ${result.memories ?? 0} memories to the current root.`),
+      `${result.rewritten_memories ?? 0} documents upgraded · ` +
+        `${result.canonicalized_relations ?? 0} relations canonicalized`,
+      c.dim(`Legacy source retained at ${result.source}`),
+    );
+    if (result.backup) out.push(c.dim(`Previous current root retained at ${result.backup}`));
+  } else {
+    out.push('', c.green('No migration needed; the current store is already usable.'));
+  }
+  if (result.unresolved_relations?.length) {
+    out.push(c.yellow(`${result.unresolved_relations.length} unresolved relation(s) were retained.`));
   }
   return out.join('\n');
 }

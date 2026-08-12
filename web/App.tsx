@@ -72,7 +72,10 @@ function endOfToday(): number {
 
 export function App() {
   const { state, error, refresh } = useLiveState();
-  const [view, setView] = useState<ViewId>('board');
+  const [view, setView] = useState<ViewId>(() => {
+    if (typeof window === 'undefined') return 'board';
+    return new URLSearchParams(window.location.hash.slice(1)).has('memory') ? 'memory' : 'board';
+  });
   const [project, setProject] = useState<string | null>(null);
   const [tag, setTag] = useState<string | null>(null);
   const [query, setQuery] = useState('');
