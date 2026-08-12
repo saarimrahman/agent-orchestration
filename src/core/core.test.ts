@@ -578,6 +578,19 @@ describe('AGENTS.md merge', () => {
     assert.match(instructions, /returns it to the ready queue for\na fresh audit/);
     assert.match(instructions, /Do not close the task while its acceptance remains unconfirmed/);
   });
+
+  test('makes both supported interfaces and their help discoverable', () => {
+    const instructions = mergeAgentsFile('');
+
+    assert.match(instructions, /Use the CLI\nfor one-off reads and writes; use the SDK/);
+    assert.match(instructions, /orchestration help/);
+    assert.match(instructions, /orchestration instructions/);
+    assert.match(instructions, /orchestration where/);
+    assert.match(instructions, /openOrchestration/);
+    assert.match(instructions, /OrchestrationClient/);
+    assert.match(instructions, /queue\.close\(\)/);
+    assert.match(instructions, /Never edit the SQLite database directly/);
+  });
 });
 
 describe('writes report what actually landed', () => {

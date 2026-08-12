@@ -6,8 +6,36 @@ This file is the authoritative agent-facing contract for this repository.
 ## Task queue (`orchestration`)
 
 Shared to-do list for this project. You pick work off it, report progress to it,
-and close items on it. The CLI is the durable coordination layer; it does not
-spawn agents or supervise processes. Every read command takes `--json`.
+and close items on it. The CLI and TypeScript SDK are durable coordination
+interfaces; they do not spawn agents or supervise processes. Every CLI read
+command takes `--json`.
+
+### Interfaces and help
+
+The CLI and TypeScript SDK use the same database and queue rules. Use the CLI
+for one-off reads and writes; use the SDK when a script needs several operations,
+batching, or polling. Never edit the SQLite database directly.
+
+- CLI discovery: `orchestration help` lists commands and common options,
+  `orchestration instructions` prints this workflow, and `orchestration where`
+  shows the resolved database path. Add `--json` to reads when consuming output.
+- SDK discovery: import `openOrchestration` and the `OrchestrationClient` type
+  from `orchestration`. Its exported TypeScript types are the supported API.
+  Use `orchestration/core` only for lower-level, database-aware primitives.
+- Identify yourself with `--agent <name>` in the CLI or `actor` in the SDK so
+  claims, comments, and events have useful provenance.
+
+```ts
+import { openOrchestration } from 'orchestration';
+
+const queue = openOrchestration({ actor: 'my-agent' });
+try {
+  const task = queue.claimNext();
+  if (task) queue.addComment(task.ref, 'Checkpoint reached.', 'progress');
+} finally {
+  queue.close();
+}
+```
 
 ### Own the outcome
 
